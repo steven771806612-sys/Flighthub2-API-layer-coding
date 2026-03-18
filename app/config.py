@@ -1,7 +1,16 @@
+import os
 from pydantic_settings import BaseSettings
 
+def _resolve_redis_url() -> str:
+    """Railway 可能注入多种变量名，按优先级探测。"""
+    for key in ("REDIS_URL", "REDIS_PRIVATE_URL", "REDIS_PUBLIC_URL", "REDISURL", "REDIS_TLS_URL"):
+        val = os.environ.get(key)
+        if val:
+            return val
+    return "redis://127.0.0.1:6379/0"
+
 class Settings(BaseSettings):
-    REDIS_URL: str = "redis://127.0.0.1:6379/0"
+    REDIS_URL: str = _resolve_redis_url()
 
     # Queue backend: Redis Streams (Kafka substitute in this sandbox)
     STREAM_KEY_RAW: str = "uw:webhook:raw"
