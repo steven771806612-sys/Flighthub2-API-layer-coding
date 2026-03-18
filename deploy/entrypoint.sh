@@ -1,18 +1,22 @@
 #!/bin/bash
 # entrypoint.sh — Railway-compatible startup script
-# 不使用 set -e，每个步骤单独处理错误，避免非致命失败终止容器
+# 故意不使用 set -e，每步单独处理，避免非致命失败杀死容器
 
-# ── 1. 打印诊断信息 ────────────────────────────────────────────────────────────
-echo "[entrypoint] ====== startup ======"
-echo "[entrypoint] PORT=${PORT:-8000}"
-echo "[entrypoint] REDIS env vars:"
+# ── 1. 诊断信息 ──────────────────────────────────────────────────────────────
+echo "================================================================"
+echo "[entrypoint] Universal Webhook Middleware — startup"
+echo "[entrypoint] Date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+echo "[entrypoint] PORT=${PORT:-<not set>}"
+echo "----------------------------------------------------------------"
+echo "[entrypoint] All REDIS-related env vars:"
 env | grep -iE '^REDIS' | sed 's/=.*/=***/' || echo "  (none found)"
-echo "[entrypoint] ====================="
+echo "================================================================"
 
-# ── 2. 解析 REDIS_URL（探测所有 Railway 可能的变量名）──────────────────────────
+# ── 2. 解析 REDIS_URL（兼容 Railway 所有可能的变量名）────────────────────────
 REDIS_URL_RESOLVED=$(python3 - <<'PYEOF'
 import os, sys
 
+# Railway 可能注入的所有 Redis 变量名
 candidates = [
     "REDIS_URL",
     "REDIS_PRIVATE_URL",
@@ -24,23 +28,30 @@ candidates = [
 for key in candidates:
     val = os.environ.get(key, "").strip()
     if val:
-        print(f"[entrypoint] found Redis URL in {key}", file=sys.stderr)
-        print(val)   # stdout → captured by bash
+        print(f"[entrypoint] found Redis URL in env var: {key}", file=sys.stderr)
+        print(val)   # stdout → 由 bash 捕获
         sys.exit(0)
 
-print("[entrypoint] WARNING: no Redis env var found, using default", file=sys.stderr)
+print("[entrypoint] WARNING: no Redis env var found, falling back to localhost", file=sys.stderr)
 print("redis://127.0.0.1:6379/0")
 PYEOF
 )
 
 export REDIS_URL="${REDIS_URL_RESOLVED}"
-echo "[entrypoint] REDIS_URL resolved to: ${REDIS_URL:0:50}..."
+# 打印脱敏的 URL（只显示前 40 字符）
+echo "[entrypoint] REDIS_URL = ${REDIS_URL:0:40}..."
 
-# ── 3. 等待 Redis 就绪（60次重试，每次 1s）─────────────────────────────────────
-echo "[entrypoint] waiting for Redis..."
+# ── 3. 确定并 export PORT（Railway 动态注入 $PORT，未设置时默认 8000）───────────
+export PORT="${PORT:-8000}"
+echo "[entrypoint] API PORT = ${PORT}"
 
+# ── 4. 等待 Redis 就绪（最多 90 次，每次 2s = 最长 3 分钟）──────────────────
+echo "[entrypoint] Waiting for Redis to become ready..."
+
+MAX_TRIES=90
 REDIS_READY=0
-for i in $(seq 1 60); do
+
+for i in $(seq 1 ${MAX_TRIES}); do
     RESULT=$(python3 - <<PYEOF 2>&1
 import redis, os, sys
 url = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
@@ -56,36 +67,31 @@ except Exception as e:
 PYEOF
     )
     if echo "$RESULT" | grep -q "^OK"; then
-        echo "[entrypoint] Redis ready at attempt ${i}"
+        echo "[entrypoint] Redis ready ✓ (attempt ${i}/${MAX_TRIES})"
         REDIS_READY=1
         break
     fi
-    echo "[entrypoint] attempt ${i}/60: ${RESULT}"
-    sleep 1
+    echo "[entrypoint] attempt ${i}/${MAX_TRIES}: ${RESULT}"
+    sleep 2
 done
 
 if [ "$REDIS_READY" -ne 1 ]; then
-    echo "[entrypoint] FATAL: Redis not reachable after 60s" >&2
-    echo "[entrypoint] Last error: ${RESULT}" >&2
+    echo "[entrypoint] FATAL: Redis not reachable after ${MAX_TRIES} attempts" >&2
+    echo "[entrypoint] Last result: ${RESULT}" >&2
+    echo "[entrypoint] Current REDIS_URL: ${REDIS_URL:0:60}" >&2
+    echo "[entrypoint] Please verify Redis service is linked in Railway dashboard" >&2
     exit 1
 fi
 
-# ── 4. 写 PORT 到 supervisord 环境变量（解决 %(ENV_PORT)s 为空的问题）───────────
-RUNTIME_PORT="${PORT:-8000}"
-echo "[entrypoint] API will listen on port ${RUNTIME_PORT}"
-
-# supervisord 通过进程环境变量读取 %(ENV_PORT)s
-# 必须在 exec 前 export，supervisord 会继承父进程环境
-export PORT="${RUNTIME_PORT}"
-
-# ── 5. 引导 Redis 默认配置（幂等，失败不阻断启动）───────────────────────────────
-echo "[entrypoint] bootstrapping Redis defaults..."
-if python3 scripts/bootstrap_redis.py; then
-    echo "[entrypoint] bootstrap OK"
+# ── 5. 引导 Redis 默认配置（幂等，失败不阻断启动）───────────────────────────
+echo "[entrypoint] Running Redis bootstrap..."
+cd /app || true
+if python3 scripts/bootstrap_redis.py 2>&1; then
+    echo "[entrypoint] Bootstrap OK ✓"
 else
-    echo "[entrypoint] bootstrap WARNING: non-fatal, continuing..." >&2
+    echo "[entrypoint] Bootstrap WARNING: non-fatal, continuing..." >&2
 fi
 
-# ── 6. 启动 supervisord（前台运行，接管进程生命周期）────────────────────────────
-echo "[entrypoint] starting supervisord..."
+# ── 6. 启动 supervisord（前台运行，接管所有子进程）─────────────────────────
+echo "[entrypoint] Starting supervisord (PORT=${PORT})..."
 exec supervisord -c /app/deploy/supervisord.conf

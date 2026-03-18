@@ -1,21 +1,24 @@
 # Railway 部署配置
 # 文档：https://docs.railway.app/reference/config-as-code
 #
-# 前置条件（Railway 控制台操作）：
-#   1. 在同一 Project 下 点击 "+ New" → "Database" → "Add Redis"
-#   2. Railway 自动注入 REDIS_URL 到本服务，无需手动配置
+# ─── 前置操作（Railway 控制台）────────────────────────────────────
+#   1. 在同一 Project 下点击 "+ New" → "Database" → "Add Redis"
+#   2. Railway 自动将 REDIS_URL 注入到本 App 服务，无需手动配置
 #
-# 可选环境变量（Variables 面板手动添加）：
-#   ADMIN_TOKEN   —— Admin API 保护 Token（强烈建议生产环境设置）
+# ─── 可选环境变量（Variables 面板手动添加）────────────────────────
+#   ADMIN_TOKEN   —— Admin API 保护令牌（生产环境强烈建议设置）
+# ────────────────────────────────────────────────────────────────
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# 不设置 startCommand，由 Dockerfile ENTRYPOINT 负责启动
-# 设置了 startCommand 会覆盖 ENTRYPOINT，导致冲突
+# 不设置 startCommand — 由 Dockerfile ENTRYPOINT 负责启动
+# 设置 startCommand 会覆盖 ENTRYPOINT，产生冲突
 healthcheckPath = "/docs"
-healthcheckTimeout = 120
+# healthcheckTimeout：Railway 等待首次健康检查通过的秒数
+# 含 Redis 启动 + bootstrap + uvicorn 热身，给 180s 宽裕
+healthcheckTimeout = 180
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
