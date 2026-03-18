@@ -14,7 +14,9 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../app/static/console',
+    // 本地开发：输出到 ../app/static/console（相对 frontend/ 目录）
+    // Docker 构建：workdir=/app/frontend，outDir=/app/app/static/console（绝对路径由 Dockerfile 处理）
+    outDir: path.resolve(__dirname, '../app/static/console'),
     emptyOutDir: true,
   },
 })
