@@ -25,6 +25,7 @@ import { MappingRow, FH2_TARGET_FIELDS } from './components/MappingRow'
 import { OutputPreview } from './components/OutputPreview'
 import { MissingPanel } from './components/MissingPanel'
 import { FH2ConfigPanel } from './components/FH2ConfigPanel'
+import { DevicePicker } from './components/DevicePicker'
 import type { DebugResult, FH2Body, MappingConfig, MappingRow as MappingRowType } from '@/types'
 
 // ─── Convert visual mapping  →  legacy MappingConfig ─────────────────────────
@@ -73,10 +74,18 @@ function autoSuggestAll(fields: string[]): Record<string, string> {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function MappingBoard() {
+interface MappingBoardProps {
+  /** When passed from wizard, lock the source selector to this value */
+  wizardSourceId?: string
+}
+
+export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
   const { addToast } = useUIStore()
   const { selected, setSelected } = useSourceStore()
   const qc = useQueryClient()
+
+  // In wizard mode, always use wizardSourceId as the active source
+  const activeSource = wizardSourceId || selected
 
   const {
     mapping, setMapping, setNormalizedFields, normalizedFields,
@@ -88,17 +97,18 @@ export function MappingBoard() {
   const [selectedField, setSelectedField] = useState<string | null>(null)
   const [showSampleEditor, setShowSampleEditor] = useState(false)
 
-  // Load source list
+  // Load source list (not needed in wizard mode, but harmless)
   const { data: sources = [] } = useQuery({
     queryKey: ['sources'],
     queryFn: sourceService.list,
+    enabled: !wizardSourceId,
   })
 
   // Load existing mapping from Redis on source change
   useQuery({
-    queryKey: ['mapping', selected],
-    queryFn: () => mappingService.get(selected),
-    enabled: !!selected,
+    queryKey: ['mapping', activeSource],
+    queryFn: () => mappingService.get(activeSource),
+    enabled: !!activeSource,
     onSuccess: (cfg: MappingConfig) => {
       // Convert legacy → visual mapping
       const visual: Record<string, string> = {}
@@ -115,7 +125,7 @@ export function MappingBoard() {
     mutationFn: () => {
       let parsed: Record<string, unknown> = {}
       try { parsed = JSON.parse(samplePayload) } catch { parsed = {} }
-      return debugService.run(selected, parsed)
+      return debugService.run(activeSource, parsed)
     },
     onSuccess: (result) => {
       setDebugResult(result)
@@ -136,11 +146,11 @@ export function MappingBoard() {
   const { mutate: saveMapping, isPending: saving } = useMutation({
     mutationFn: () => {
       const legacy = visualToLegacy(mapping, normalizedFields)
-      return mappingService.set(selected, legacy)
+      return mappingService.set(activeSource, legacy)
     },
     onSuccess: () => {
       addToast('success', 'Mapping saved to Redis')
-      qc.invalidateQueries({ queryKey: ['mapping', selected] })
+      qc.invalidateQueries({ queryKey: ['mapping', activeSource] })
     },
     onError: (e: Error) => addToast('error', e.message),
   })
@@ -168,15 +178,22 @@ export function MappingBoard() {
 
       {/* ── Top bar: source selector + actions ─────────────────────────── */}
       <div className="flex items-center gap-3 flex-wrap">
-        {/* Source */}
-        <select
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
-          value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-        >
-          <option value="">— select source —</option>
-          {sources.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        {/* Source: locked badge in wizard mode, dropdown otherwise */}
+        {wizardSourceId ? (
+          <span className="inline-flex items-center gap-2 px-3 py-2 text-sm font-mono bg-brand-50 border border-brand-200 rounded-lg text-brand-800">
+            <span className="w-1.5 h-1.5 rounded-full bg-brand-500" />
+            {wizardSourceId}
+          </span>
+        ) : (
+          <select
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+          >
+            <option value="">— select source —</option>
+            {sources.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        )}
 
         {/* Sample payload toggle */}
         <button
@@ -241,7 +258,10 @@ export function MappingBoard() {
       )}
 
       {/* FH2 credentials panel */}
-      {selected && <FH2ConfigPanel sourceId={selected} />}
+      {activeSource && <FH2ConfigPanel sourceId={activeSource} />}
+
+      {/* Device GPS fallback panel */}
+      {activeSource && <DevicePicker sourceId={activeSource} />}
 
       {/* ── 3-column mapping board ──────────────────────────────────────── */}
       <div className="grid grid-cols-[220px_1fr_300px] gap-4 flex-1 min-h-0">
@@ -308,7 +328,7 @@ export function MappingBoard() {
       </div>
 
       {/* Missing fields panel */}
-      {(missing.length > 0 || normalizedFields.length > 0) && selected && (
+      {(missing.length > 0 || normalizedFields.length > 0) && activeSource && (
         <div className="border border-gray-200 rounded-xl bg-white p-4">
           <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
             Required Fields Status

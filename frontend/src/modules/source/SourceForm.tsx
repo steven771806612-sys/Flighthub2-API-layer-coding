@@ -6,7 +6,7 @@ import { useUIStore, useSourceStore } from '@/store'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
-import { Copy, RefreshCw, Eye, EyeOff } from 'lucide-react'
+import { Copy, RefreshCw, Eye, EyeOff, Trash2 } from 'lucide-react'
 import type { IngressAuth } from '@/types'
 
 // ─── Create Source ────────────────────────────────────────────────────────────
@@ -194,8 +194,9 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
 }
 
 // ─── Source Selector (shared) ──────────────────────────────────────────────────
-export function SourceSelector() {
+export function SourceSelector({ onDelete }: { onDelete?: (id: string) => void }) {
   const { sources, selected, setSelected } = useSourceStore()
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   if (!sources.length) return (
     <p className="text-sm text-gray-400">No sources yet. Create one first.</p>
@@ -204,17 +205,45 @@ export function SourceSelector() {
   return (
     <div className="flex items-center gap-2 flex-wrap">
       {sources.map((s) => (
-        <button
-          key={s}
-          onClick={() => setSelected(s)}
-          className={`px-3 py-1 rounded-full text-sm font-mono border transition-colors ${
-            selected === s
-              ? 'bg-brand-600 text-white border-brand-600'
-              : 'bg-white text-gray-600 border-gray-300 hover:border-brand-400'
-          }`}
-        >
-          {s}
-        </button>
+        <div key={s} className="relative group flex items-center">
+          <button
+            onClick={() => setSelected(s)}
+            className={`pl-3 pr-2 py-1 rounded-full text-sm font-mono border transition-colors flex items-center gap-1.5 ${
+              selected === s
+                ? 'bg-brand-600 text-white border-brand-600'
+                : 'bg-white text-gray-600 border-gray-300 hover:border-brand-400'
+            }`}
+          >
+            {s}
+          </button>
+          {/* Delete button */}
+          {onDelete && (
+            confirmDelete === s ? (
+              <div className="flex items-center gap-1 ml-1">
+                <button
+                  onClick={() => { onDelete(s); setConfirmDelete(null) }}
+                  className="text-xs text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded-full transition-colors"
+                >
+                  Confirm
+                </button>
+                <button
+                  onClick={() => setConfirmDelete(null)}
+                  className="text-xs text-gray-500 hover:text-gray-700 px-1 py-0.5"
+                >
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmDelete(s)}
+                className="ml-1 w-5 h-5 flex items-center justify-center text-gray-300 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                title={`Delete source ${s}`}
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )
+          )}
+        </div>
       ))}
     </div>
   )

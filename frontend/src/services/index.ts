@@ -12,6 +12,10 @@ export const sourceService = {
   async init(sourceId: string, force = false): Promise<void> {
     await apiClient.post('/admin/source/init', { source: sourceId, force })
   },
+
+  async delete(sourceId: string): Promise<void> {
+    await apiClient.post('/admin/source/delete', { source: sourceId })
+  },
 }
 
 // ─── Ingress Auth ─────────────────────────────────────────────────────────────

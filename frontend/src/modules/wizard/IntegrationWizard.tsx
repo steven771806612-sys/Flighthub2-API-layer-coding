@@ -2,7 +2,7 @@ import { useWizardStore, useUIStore, useSourceStore } from '@/store'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { SourceCreateForm, SourceAuthForm } from '@/modules/source/SourceForm'
-import { MappingEditor } from '@/modules/mapping/MappingEditor'
+import { MappingBoard } from '@/modules/mapping/MappingBoard'
 import { EgressConfigPanel } from '@/modules/egress/EgressConfigPanel'
 import { IntegrationTest } from './IntegrationTest'
 import { CheckCircle, Circle, ArrowRight } from 'lucide-react'
@@ -11,7 +11,7 @@ import type { WizardStep } from '@/types'
 const STEPS: { key: WizardStep; label: string; description: string }[] = [
   { key: 'create_source',    label: '1. Create Source',       description: 'Name your webhook entry point' },
   { key: 'configure_auth',   label: '2. Ingress Auth',        description: 'Set inbound token' },
-  { key: 'configure_mapping',label: '3. Field Mapping',       description: 'JSONPath transform rules' },
+  { key: 'configure_mapping',label: '3. Visual Mapping',      description: 'Map fields to FlightHub2' },
   { key: 'configure_egress', label: '4. Egress Config',       description: 'FlightHub2 endpoint & tokens' },
   { key: 'test',             label: '5. Test',                description: 'Run end-to-end test' },
 ]
@@ -86,7 +86,10 @@ export function IntegrationWizard() {
 
         {currentStep === 'configure_mapping' && sourceId && (
           <div className="space-y-4">
-            <MappingEditor sourceId={sourceId} />
+            <p className="text-sm text-gray-500">
+              Use the visual mapper to load normalized fields, map them to FlightHub2 body fields, and save.
+            </p>
+            <MappingBoard wizardSourceId={sourceId} />
             <div className="flex justify-end">
               <Button onClick={() => completeStep('configure_mapping')}>
                 Next <ArrowRight className="w-4 h-4" />

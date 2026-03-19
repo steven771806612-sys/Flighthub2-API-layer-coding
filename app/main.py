@@ -243,6 +243,31 @@ async def source_init(payload: dict[str, Any], x_admin_token: str | None = Heade
     return {"status": "ok", "message": "initialized", "source": source}
 
 
+@app.post("/admin/source/delete")
+async def source_delete(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Delete all Redis keys associated with a source (map, fhcfg, srcauth, adapter)."""
+    global repo
+    assert repo is not None
+    _require_admin(x_admin_token)
+
+    source = payload.get("source", "").strip()
+    if not source:
+        return {"status": "error", "message": "missing source"}
+
+    keys_to_delete = [
+        f"uw:map:{source}",
+        f"uw:fhcfg:{source}",
+        f"uw:srcauth:{source}",
+        f"uw:adapter:{source}",
+    ]
+    deleted = 0
+    for key in keys_to_delete:
+        n = await repo.redis.delete(key)
+        deleted += n
+
+    return {"status": "ok", "source": source, "keys_deleted": deleted}
+
+
 @app.post("/admin/token/extract")
 async def token_extract(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
     """Helper endpoint for GUI: paste raw headers / curl / JSON, extract token fields.
