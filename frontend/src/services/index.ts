@@ -1,5 +1,5 @@
 import { apiClient } from './apiClient'
-import type { IngressAuth, MappingConfig, EgressConfig, AdapterConfig, DeviceInfo, DebugResult, GpsFieldMap } from '@/types'
+import type { IngressAuth, MappingConfig, EgressConfig, AdapterConfig, DeviceInfo, DebugResult } from '@/types'
 
 // ─── Sources ─────────────────────────────────────────────────────────────────
 
@@ -113,16 +113,18 @@ export const debugService = {
   },
 }
 
-// ─── GPS Field Map (uw:gpsfieldmap:{source}) ──────────────────────────────────
+// ─── Device ID Field (uw:deviceidfield:{source}) ─────────────────────────────
+// Configures which flattened payload field to use as the device lookup key
+// when the vendor doesn't use the standard `device_id` field.
 
-export const gpsFieldMapService = {
-  async get(sourceId: string): Promise<GpsFieldMap> {
-    const { data } = await apiClient.post('/admin/gpsfieldmap/get', { source: sourceId })
-    return (data.gps_field_map ?? {}) as GpsFieldMap
+export const deviceIdFieldService = {
+  async get(sourceId: string): Promise<string> {
+    const { data } = await apiClient.post('/admin/deviceidfield/get', { source: sourceId })
+    return (data.device_id_field ?? '') as string
   },
 
-  async set(sourceId: string, cfg: GpsFieldMap): Promise<void> {
-    await apiClient.post('/admin/gpsfieldmap/set', { source: sourceId, gps_field_map: cfg })
+  async set(sourceId: string, field: string): Promise<void> {
+    await apiClient.post('/admin/deviceidfield/set', { source: sourceId, device_id_field: field })
   },
 }
 

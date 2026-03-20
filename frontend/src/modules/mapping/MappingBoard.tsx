@@ -26,7 +26,7 @@ import { OutputPreview } from './components/OutputPreview'
 import { MissingPanel } from './components/MissingPanel'
 import { FH2ConfigPanel } from './components/FH2ConfigPanel'
 import { DevicePicker } from './components/DevicePicker'
-import type { DebugResult, FH2Body, MappingConfig, MappingRow as MappingRowType, GpsFieldMap, DeviceInfo } from '@/types'
+import type { DebugResult, FH2Body, MappingConfig, MappingRow as MappingRowType, DeviceInfo } from '@/types'
 
 // ─── Convert visual mapping  →  legacy MappingConfig ─────────────────────────
 // Visual: { "event.name": "name", "device.id": "params.device_id" }
@@ -98,7 +98,7 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
   const [showSampleEditor, setShowSampleEditor] = useState(false)
   // Live state for MissingPanel coverage calculation
   const [liveWorkflowUuid, setLiveWorkflowUuid] = useState('')
-  const [liveGpsFieldMap, setLiveGpsFieldMap] = useState<GpsFieldMap>({})
+  const [liveDeviceIdField, setLiveDeviceIdField] = useState('')
   const [hasDeviceGps, setHasDeviceGps] = useState(false)
 
   // Load source list (not needed in wizard mode, but harmless)
@@ -137,11 +137,13 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
     },
   } as Parameters<typeof useQuery>[0])
 
-  // Debug run mutation
+  // Debug run mutation — use a variable ref to avoid stale closure on samplePayload
   const { mutate: runDebug, isPending: running } = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      // Re-read store state inside the mutationFn so it always gets the latest value
+      const latestPayload = useMappingStore.getState().samplePayload
       let parsed: Record<string, unknown> = {}
-      try { parsed = JSON.parse(samplePayload) } catch { parsed = {} }
+      try { parsed = JSON.parse(latestPayload) } catch { parsed = {} }
       return debugService.run(activeSource, parsed)
     },
     onSuccess: (result) => {
@@ -162,7 +164,10 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
   // Save mapping mutation
   const { mutate: saveMapping, isPending: saving } = useMutation({
     mutationFn: () => {
-      const legacy = visualToLegacy(mapping, normalizedFields)
+      // Always read current mapping from store to avoid stale closure
+      const currentMapping = useMappingStore.getState().mapping
+      const currentNormalized = useMappingStore.getState().normalizedFields
+      const legacy = visualToLegacy(currentMapping, currentNormalized)
       return mappingService.set(activeSource, legacy)
     },
     onSuccess: () => {
@@ -228,7 +233,7 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
         <button
           type="button"
           onClick={() => runDebug()}
-          disabled={!selected || running}
+          disabled={!activeSource || running}
           className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50 transition-colors"
         >
           <Play className="w-3.5 h-3.5" />
@@ -251,7 +256,7 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
         <button
           type="button"
           onClick={() => saveMapping()}
-          disabled={!selected || saving || Object.keys(mapping).length === 0}
+          disabled={!activeSource || saving || Object.keys(mapping).length === 0}
           className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors ml-auto"
         >
           <Save className="w-3.5 h-3.5" />
@@ -286,10 +291,7 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
       {activeSource && (
         <DevicePicker
           sourceId={activeSource}
-          onGpsFieldMapChange={(cfg) => {
-            setLiveGpsFieldMap(cfg)
-            // detect if any device has GPS (updated after list query)
-          }}
+          onDeviceIdFieldChange={setLiveDeviceIdField}
         />
       )}
 
@@ -366,7 +368,7 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
           <MissingPanel
             missing={debugResult?.missing ?? (normalizedFields.length > 0 ? missing : undefined)}
             workflowUuid={liveWorkflowUuid}
-            gpsFieldMap={liveGpsFieldMap}
+            deviceIdField={liveDeviceIdField}
             hasDeviceGps={hasDeviceGps}
           />
         </div>

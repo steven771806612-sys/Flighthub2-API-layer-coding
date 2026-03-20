@@ -50,11 +50,9 @@ class RedisRepo:
         return f"uw:device:{device_id}"
 
     @staticmethod
-    def _k_gps_field_map(source: str) -> str:
-        """uw:gpsfieldmap:{source}  →  GPS field mapping config.
-        Format: {"lat": "Event.Location.Latitude", "lng": "Event.Location.Longitude", "alt": "Event.Altitude"}
-        """
-        return f"uw:gpsfieldmap:{source}"
+    def _k_device_id_field(source: str) -> str:
+        """uw:deviceidfield:{source}  →  which payload field holds the device ID."""
+        return f"uw:deviceidfield:{source}"
 
     # ── Existing methods (unchanged) ──────────────────────────────────────────
 
@@ -109,16 +107,17 @@ class RedisRepo:
         """Persist device metadata."""
         await self.redis.set(self._k_device(device_id), json.dumps(info, ensure_ascii=False))
 
-    async def get_gps_field_map(self, source: str) -> dict:
-        """Return GPS field mapping for *source*.  Empty dict if not configured.
-        Returns: {"lat": "field.path", "lng": "field.path", "alt": "field.path"}
+    async def get_device_id_field(self, source: str) -> str:
+        """Return the payload field name used as device lookup key for *source*.
+        Empty string means use the default 'device_id' key.
         """
-        raw = await self.redis.get(self._k_gps_field_map(source))
+        raw = await self.redis.get(self._k_device_id_field(source))
         if not raw:
-            return {}
-        return json.loads(raw)
+            return ""
+        val = json.loads(raw)
+        return str(val) if val else ""
 
-    async def set_gps_field_map(self, source: str, cfg: dict) -> None:
-        """Persist GPS field mapping for *source*."""
-        await self.redis.set(self._k_gps_field_map(source), json.dumps(cfg, ensure_ascii=False))
+    async def set_device_id_field(self, source: str, field: str) -> None:
+        """Persist device ID field config for *source*."""
+        await self.redis.set(self._k_device_id_field(source), json.dumps(field, ensure_ascii=False))
 

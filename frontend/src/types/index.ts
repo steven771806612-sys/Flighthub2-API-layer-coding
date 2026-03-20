@@ -165,13 +165,6 @@ export interface FH2Body {
   params: FH2Params
 }
 
-/** GPS field mapping: which flat-dict keys to read lat/lng/alt from */
-export interface GpsFieldMap {
-  lat?: string   // e.g. "Event.Location.Latitude"
-  lng?: string   // e.g. "Event.Location.Longitude"
-  alt?: string   // e.g. "Event.Altitude"
-}
-
 /** Visual mapping: normalized_field_key → fh2_body_path */
 export type VisualMapping = Record<string, string>
 

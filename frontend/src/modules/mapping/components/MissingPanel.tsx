@@ -6,10 +6,9 @@
  * Coverage logic (layered, mirrors backend priority):
  *  1. mapped via visual mapping          → ✓ mapped
  *  2. workflow_uuid set in FH2Config     → ✓ covered (config)
- *  3. lat/lng covered by gpsFieldMap     → ✓ covered (gps map)
- *  4. lat/lng covered by device GPS      → ~ covered (device)
- *  5. has hardcoded default              → ~ default
- *  6. still missing from debug run       → ⚠ missing
+ *  3. lat/lng covered by device GPS      → ~ covered (device)
+ *  4. has hardcoded default              → ~ default
+ *  5. still missing from debug run       → ⚠ missing
  */
 import { AlertTriangle, CheckCircle2, Info } from 'lucide-react'
 import { useMappingStore } from '@/store'
@@ -19,8 +18,8 @@ import { FH2_TARGET_FIELDS } from './MappingRow'
 const HAS_DEFAULT = new Set(['params.level', 'params.creator', 'trigger_type', 'params.desc'])
 
 const AUTOFILL_NOTES: Record<string, string> = {
-  'params.latitude':  'Can be filled from device GPS or GPS field mapping',
-  'params.longitude': 'Can be filled from device GPS or GPS field mapping',
+  'params.latitude':  'Will use device GPS if device record is found',
+  'params.longitude': 'Will use device GPS if device record is found',
   'params.level':     'Default = 3 (warning)',
   'params.creator':   'Default = "system"',
   'workflow_uuid':    'Set workflow_uuid in FH2 Credentials above',
@@ -31,8 +30,8 @@ interface MissingPanelProps {
   missing?: string[]
   /** workflow_uuid currently typed in FH2ConfigPanel (live) */
   workflowUuid?: string
-  /** gps field map configured in DevicePicker */
-  gpsFieldMap?: { lat?: string; lng?: string; alt?: string }
+  /** device_id_field configured in DevicePicker (used for GPS lookup) */
+  deviceIdField?: string
   /** whether any device with GPS is registered */
   hasDeviceGps?: boolean
 }
@@ -40,7 +39,7 @@ interface MissingPanelProps {
 export function MissingPanel({
   missing: externalMissing,
   workflowUuid = '',
-  gpsFieldMap = {},
+  deviceIdField = '',
   hasDeviceGps = false,
 }: MissingPanelProps) {
   const { missing: storeMissing, mapping } = useMappingStore()
@@ -50,14 +49,17 @@ export function MissingPanel({
   const required = FH2_TARGET_FIELDS.filter((f) => f.required)
   const mappedTargets = new Set(Object.values(mapping))
 
+  // GPS is considered covered if:
+  //  - any device has GPS AND (device_id is mapped OR deviceIdField is configured)
+  const deviceIdMapped = mappedTargets.has('params.device_id') ||
+    Object.keys(mapping).some(k => k === 'device_id')
+  const gpsViableViaDevice = hasDeviceGps && (deviceIdMapped || deviceIdField.trim() !== '')
+
   // Compute effective coverage for each field
-  const getCoverage = (path: string): 'mapped' | 'config' | 'gps_map' | 'device' | 'default' | 'missing' => {
+  const getCoverage = (path: string): 'mapped' | 'config' | 'device' | 'default' | 'missing' => {
     if (mappedTargets.has(path)) return 'mapped'
     if (path === 'workflow_uuid' && workflowUuid.trim()) return 'config'
-    if ((path === 'params.latitude' && gpsFieldMap.lat?.trim()) ||
-        (path === 'params.longitude' && gpsFieldMap.lng?.trim()) ||
-        (path === 'params.altitude' && gpsFieldMap.alt?.trim())) return 'gps_map'
-    if ((path === 'params.latitude' || path === 'params.longitude') && hasDeviceGps) return 'device'
+    if ((path === 'params.latitude' || path === 'params.longitude') && gpsViableViaDevice) return 'device'
     if (HAS_DEFAULT.has(path)) return 'default'
     if (missingFromDebug.includes(path)) return 'missing'
     return 'default'
@@ -80,6 +82,11 @@ export function MissingPanel({
             ? 'All required fields covered'
             : `${reallyMissing} field${reallyMissing !== 1 ? 's' : ''} may be missing`}
         </span>
+        {deviceIdField && (
+          <span className="text-xs text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-full px-2 py-0.5 font-mono ml-auto">
+            id-field: {deviceIdField}
+          </span>
+        )}
       </div>
 
       {/* Required field checklist */}
@@ -91,12 +98,12 @@ export function MissingPanel({
           const bgClass =
             coverage === 'missing' ? 'bg-amber-50 border-amber-200' :
             coverage === 'mapped'  ? 'bg-emerald-50 border-emerald-200' :
-            coverage === 'config' || coverage === 'gps_map' ? 'bg-blue-50 border-blue-200' :
+            coverage === 'config'  ? 'bg-blue-50 border-blue-200' :
             coverage === 'device'  ? 'bg-teal-50 border-teal-200' :
                                      'bg-gray-50 border-gray-200'
 
           const icon =
-            coverage === 'mapped' || coverage === 'config' || coverage === 'gps_map'
+            coverage === 'mapped' || coverage === 'config'
               ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
               : coverage === 'device'
               ? <CheckCircle2 className="w-3.5 h-3.5 text-teal-500" />
@@ -106,16 +113,15 @@ export function MissingPanel({
 
           const labelColor =
             coverage === 'missing' ? 'text-amber-700' :
-            coverage === 'mapped' || coverage === 'config' || coverage === 'gps_map' ? 'text-emerald-700' :
+            coverage === 'mapped' || coverage === 'config' ? 'text-emerald-700' :
             coverage === 'device' ? 'text-teal-700' :
             'text-gray-600'
 
           const badge =
-            coverage === 'mapped'   ? <span className="text-emerald-600 font-medium shrink-0 text-xs">✓ mapped</span> :
-            coverage === 'config'   ? <span className="text-blue-600 font-medium shrink-0 text-xs">✓ config</span> :
-            coverage === 'gps_map'  ? <span className="text-blue-600 font-medium shrink-0 text-xs">✓ gps map</span> :
-            coverage === 'device'   ? <span className="text-teal-600 font-medium shrink-0 text-xs">~ device</span> :
-            coverage === 'default'  ? <span className="text-gray-400 font-medium shrink-0 text-xs">~ default</span> :
+            coverage === 'mapped'  ? <span className="text-emerald-600 font-medium shrink-0 text-xs">✓ mapped</span> :
+            coverage === 'config'  ? <span className="text-blue-600 font-medium shrink-0 text-xs">✓ config</span> :
+            coverage === 'device'  ? <span className="text-teal-600 font-medium shrink-0 text-xs">~ device GPS</span> :
+            coverage === 'default' ? <span className="text-gray-400 font-medium shrink-0 text-xs">~ default</span> :
             null
 
           return (
@@ -123,7 +129,7 @@ export function MissingPanel({
               <span className="mt-0.5 shrink-0">{icon}</span>
               <div className="flex-1 min-w-0">
                 <span className={`font-mono font-semibold ${labelColor}`}>{f.path}</span>
-                {note && coverage !== 'mapped' && coverage !== 'config' && coverage !== 'gps_map' && (
+                {note && coverage !== 'mapped' && coverage !== 'config' && (
                   <span className="block text-gray-400 mt-0.5">{note}</span>
                 )}
               </div>
@@ -132,6 +138,15 @@ export function MissingPanel({
           )
         })}
       </div>
+
+      {/* GPS hint when device registered but device_id not mapped or configured */}
+      {hasDeviceGps && !gpsViableViaDevice && (
+        <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2">
+          ℹ Devices with GPS are registered, but no device ID source is configured.
+          Map <code className="font-mono">device_id</code> in the field mapping above,
+          or set a <strong>Device ID Field</strong> in the GPS Fallback panel to enable lookup.
+        </p>
+      )}
     </div>
   )
 }

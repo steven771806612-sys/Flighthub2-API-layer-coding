@@ -113,9 +113,23 @@ async def run():
                 unified = await enrich(unified, repo)
 
                 # Step 5: Autofill → build final FH2 request body
+                #
+                # Resolve device_id:
+                #  a) Standard key: unified["device_id"] or unified["device"]["id"]
+                #  b) Per-source configured field (device_id_field) for vendors that
+                #     use a non-standard identifier field (e.g. deviceSN, camera.id)
                 device_id = unified.get("device_id") or ""
                 if isinstance(unified.get("device"), dict):
                     device_id = device_id or unified["device"].get("id", "")
+
+                if not device_id:
+                    device_id_field = await repo.get_device_id_field(source)
+                    if device_id_field:
+                        # Try unified dict first, then the flat dict
+                        device_id = str(
+                            unified.get(device_id_field) or flat.get(device_id_field) or ""
+                        )
+
                 device_info = (await repo.get_device(str(device_id))) if device_id else {}
 
                 autofill_conf = {}
@@ -126,10 +140,7 @@ async def run():
                     if isinstance(tb, dict):
                         workflow_uuid = str(tb.get("workflow_uuid", ""))
 
-                # GPS field map (source-level, allows GPS without device_id)
-                gps_field_map = await repo.get_gps_field_map(source)
-
-                filled, missing_fields = autofill(unified, device_info, autofill_conf, gps_field_map)
+                filled, missing_fields = autofill(unified, device_info, autofill_conf)
                 body = build_fh2_body(filled, workflow_uuid=workflow_uuid)
 
                 if missing_fields:

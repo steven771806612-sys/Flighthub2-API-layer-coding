@@ -501,12 +501,12 @@ async def device_list(payload: dict[str, Any], x_admin_token: str | None = Heade
     return {"status": "ok", "devices": sorted(device_ids)}
 
 
-# ── GPS Field Map ─────────────────────────────────────────────────────────────
+# ── Device ID Field (per-source) ────────────────────────────────────────────────────────
 
-@app.post("/admin/gpsfieldmap/get")
-async def gps_field_map_get(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
-    """Get GPS field mapping config for a source.
-    Returns: {"lat": "field.path", "lng": "field.path", "alt": "field.path"}
+@app.post("/admin/deviceidfield/get")
+async def device_id_field_get(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Get the payload field used as device lookup key for a source.
+    Returns: {"device_id_field": "fieldName"}  (empty string means default 'device_id')
     """
     global repo
     assert repo is not None
@@ -514,23 +514,22 @@ async def gps_field_map_get(payload: dict[str, Any], x_admin_token: str | None =
     source = payload.get("source", "").strip()
     if not source:
         return {"status": "error", "message": "missing source"}
-    cfg = await repo.get_gps_field_map(source)
-    return {"status": "ok", "gps_field_map": cfg}
+    field = await repo.get_device_id_field(source)
+    return {"status": "ok", "device_id_field": field}
 
 
-@app.post("/admin/gpsfieldmap/set")
-async def gps_field_map_set(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
-    """Set GPS field mapping config for a source."""
+@app.post("/admin/deviceidfield/set")
+async def device_id_field_set(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Set the payload field used as device lookup key for a source."""
     global repo
     assert repo is not None
     _require_admin(x_admin_token)
     source = payload.get("source", "").strip()
-    cfg = payload.get("gps_field_map")
-    if not source or cfg is None:
-        return {"status": "error", "message": "missing source or gps_field_map"}
-    await repo.set_gps_field_map(source, cfg)
+    field = payload.get("device_id_field", "")
+    if not source:
+        return {"status": "error", "message": "missing source"}
+    await repo.set_device_id_field(source, str(field))
     return {"status": "ok", "source": source}
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # DEBUG  — run full pipeline on a sample payload, return each stage output
@@ -595,12 +594,18 @@ async def debug_run(payload: dict[str, Any], x_admin_token: str | None = Header(
             if isinstance(tb, dict):
                 workflow_uuid = str(tb.get("workflow_uuid", ""))
 
-        gps_field_map = await repo.get_gps_field_map(source)
-        filled, missing = autofill(event, device_info, autofill_conf, gps_field_map)
+        # Resolve device_id using per-source field config if standard key not found
+        device_id_field = await repo.get_device_id_field(source)
+        if not device_id and device_id_field:
+            device_id = str(event.get(device_id_field) or flat.get(device_id_field) or "")
+            if device_id:
+                device_info = await repo.get_device(device_id)
+
+        filled, missing = autofill(event, device_info, autofill_conf)
         final_body = build_fh2_body(filled, workflow_uuid=workflow_uuid)
         stages["final_body"] = final_body
         stages["missing"] = missing
-        stages["gps_field_map"] = gps_field_map
+        stages["device_id_field"] = device_id_field
 
         return {"status": "ok", **stages}
 
