@@ -57,6 +57,19 @@ _FH2_PARAMS: list[tuple[str, type, Any]] = [
     ("params.desc",      str,   ""),
 ]
 
+# ─── Level string → int mapping ──────────────────────────────────────────────
+_LEVEL_MAP: dict[str, int] = {
+    "critical": 5,
+    "error":    4,
+    "warning":  3,
+    "warn":     3,
+    "info":     2,
+    "debug":    1,
+    "low":      1,
+    "medium":   3,
+    "high":     4,
+}
+
 _FH2_TOP: list[tuple[str, type, Any]] = [
     ("workflow_uuid", str,   ""),
     ("trigger_type",  int,   0),
@@ -104,13 +117,15 @@ def autofill(
         "params.longitude": "lng",
     }
 
-    # Mapped field aliases: body_path → possible mapped keys
+    # Mapped field aliases: body_path → possible mapped keys.
+    # Include dot-path variants (e.g. "params.latitude") that visualToLegacy
+    # may write as dst when saving from the visual mapping UI.
     _mapped_aliases: dict[str, list[str]] = {
-        "params.creator":   ["creator_id", "creator", "operator"],
-        "params.latitude":  ["latitude", "lat"],
-        "params.longitude": ["longitude", "lng"],
-        "params.level":     ["level", "event_level", "severity"],
-        "params.desc":      ["description", "desc", "message"],
+        "params.creator":   ["params.creator", "creator_id", "creator", "operator"],
+        "params.latitude":  ["params.latitude", "latitude", "lat"],
+        "params.longitude": ["params.longitude", "longitude", "lng"],
+        "params.level":     ["params.level", "level", "event_level", "severity"],
+        "params.desc":      ["params.desc", "description", "desc", "message"],
         "workflow_uuid":    ["workflow_uuid"],
         "trigger_type":     ["trigger_type"],
         "name":             ["name", "event_name"],
@@ -119,17 +134,21 @@ def autofill(
     all_fields = _FH2_TOP + _FH2_PARAMS
 
     for body_path, cast, hardcoded_default in all_fields:
-        # 1. Already in filled under exact body_path key
-        if body_path in filled and filled[body_path] is not None:
-            _safe_cast(filled, body_path, cast)
-            continue
+        # 1. Already in filled under exact body_path key — skip empty strings
+        if body_path in filled:
+            existing = filled[body_path]
+            if existing is not None and not (isinstance(existing, str) and not str(existing).strip()):
+                _safe_cast(filled, body_path, cast)
+                continue
 
-        # 2. Try mapped aliases
+        # 2. Try mapped aliases (skip None and empty/whitespace strings)
         val = None
         for alias in _mapped_aliases.get(body_path, []):
-            if alias in filled and filled[alias] is not None:
-                val = filled[alias]
-                break
+            if alias in filled:
+                candidate = filled[alias]
+                if candidate is not None and not (isinstance(candidate, str) and not str(candidate).strip()):
+                    val = candidate
+                    break
 
         # 3. Try device location (GPS injected from device registry)
         if val is None and body_path in _device_map:
@@ -146,6 +165,9 @@ def autofill(
             val = hardcoded_default
 
         if val is not None:
+            # Special: cast level string (warning/critical/…) → int
+            if cast is int and isinstance(val, str) and not val.lstrip('-').isdigit():
+                val = _LEVEL_MAP.get(val.lower().strip(), 3)
             try:
                 filled[body_path] = cast(val)
             except (TypeError, ValueError):
@@ -179,6 +201,16 @@ def build_fh2_body(
     def _f(key: str, default: Any = None) -> Any:
         return filled.get(key, default)
 
+    # Safely cast level — may still be a string ("warning") at this point
+    raw_level = _f("params.level", 3)
+    if isinstance(raw_level, str) and not raw_level.lstrip('-').isdigit():
+        raw_level = _LEVEL_MAP.get(raw_level.lower().strip(), 3)
+    try:
+        level_int = int(raw_level)
+    except (TypeError, ValueError):
+        level_int = 3
+    level_int = max(1, min(5, level_int))  # clamp to 1-5
+
     return {
         "workflow_uuid": wf_uuid,
         "trigger_type":  int(_f("trigger_type", 0)),
@@ -187,7 +219,7 @@ def build_fh2_body(
             "creator":   str(_f("params.creator",   "system")),
             "latitude":  _f("params.latitude",   0),
             "longitude": _f("params.longitude",  0),
-            "level":     int(_f("params.level",   3)),
+            "level":     level_int,
             "desc":      str(_f("params.desc",    "")),
         },
     }
