@@ -2,11 +2,12 @@ import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { sourceService, authService } from '@/services'
-import { useUIStore, useSourceStore } from '@/store'
+import { useUIStore, useSourceStore, useMappingStore } from '@/store'
+import { useDirtyGuard } from '@/hooks/useDirtyGuard'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
-import { Copy, RefreshCw, Eye, EyeOff, Trash2 } from 'lucide-react'
+import { Copy, RefreshCw, Eye, EyeOff, AlertTriangle, Trash2 } from 'lucide-react'
 import type { IngressAuth } from '@/types'
 
 // ─── Create Source ────────────────────────────────────────────────────────────
@@ -66,6 +67,7 @@ interface AuthFormFields {
 export function SourceAuthForm({ sourceId }: { sourceId: string }) {
   const { addToast } = useUIStore()
   const [showToken, setShowToken] = useState(false)
+  const { isDirty, markDirty, markClean } = useDirtyGuard()
   const { register, handleSubmit, setValue, watch, reset, formState: { errors } } = useForm<AuthFormFields>({
     defaultValues: { enabled: true, header_name: 'X-MW-Token', token: '' },
   })
@@ -88,8 +90,9 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
         header_name: existingAuth.header_name ?? 'X-MW-Token',
         token: '', // 不回填脱敏值，强迫用户主动输入新 token 才会覆盖
       })
+      markClean()
     }
-  }, [existingAuth, reset])
+  }, [existingAuth, reset, markClean])
 
   // 是否已有 token（后端返回的脱敏值包含 ****)
   const hasExistingToken = !!(existingAuth?.token && existingAuth.token.length > 0)
@@ -109,15 +112,31 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
     onSuccess: () => {
       addToast('success', 'Ingress auth saved')
       setValue('token', '') // 保存后清空，避免意外重复提交
+      markClean()
     },
     onError: (e: Error) => addToast('error', e.message),
   })
+
+  // Mark dirty on any form change — use RHF subscription to avoid stale closure
+  useEffect(() => {
+    const sub = watch(() => {
+      // Only flag dirty after server data has been loaded (not on initial mount)
+      if (existingAuth !== undefined) markDirty()
+    })
+    return () => sub.unsubscribe()
+  }, [watch, markDirty, existingAuth])
 
   return (
     <Card
       title="Ingress Authentication"
       description="Only requests with the correct header token will be accepted"
     >
+      {isDirty && (
+        <div className="flex items-center gap-2 px-3 py-2 mb-4 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          未保存的修改 — 请点击「Save Auth Config」保存
+        </div>
+      )}
       <form onSubmit={handleSubmit((d) => mutate(d))} className="space-y-4">
         <div className="flex items-center gap-3">
           <input type="checkbox" id="enabled" {...register('enabled')} className="w-4 h-4 rounded" />
@@ -198,7 +217,15 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
 // ─── Source Selector (shared) ──────────────────────────────────────────────────
 export function SourceSelector({ onDelete }: { onDelete?: (id: string) => void }) {
   const { sources, selected, setSelected } = useSourceStore()
+  const { switchSource } = useMappingStore()
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+
+  const handleSelectSource = (s: string) => {
+    if (s === selected) return
+    // Mapping drafts persist per-source; no data loss, but inform user preview resets
+    setSelected(s)
+    switchSource(s)
+  }
 
   if (!sources.length) return (
     <p className="text-sm text-gray-400">No sources yet. Create one first.</p>
@@ -209,7 +236,7 @@ export function SourceSelector({ onDelete }: { onDelete?: (id: string) => void }
       {sources.map((s) => (
         <div key={s} className="relative group flex items-center">
           <button
-            onClick={() => setSelected(s)}
+            onClick={() => handleSelectSource(s)}
             className={`pl-3 pr-2 py-1 rounded-full text-sm font-mono border transition-colors flex items-center gap-1.5 ${
               selected === s
                 ? 'bg-brand-600 text-white border-brand-600'

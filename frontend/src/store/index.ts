@@ -16,20 +16,31 @@ export const useAuthStore = create<AuthStore>((set) => ({
   },
 }))
 
-// ─── Source list store ────────────────────────────────────────────────────────
+// ─── Source store — persisted ─────────────────────────────────────────────────
+// `selected` survives page refresh so users don't re-pick source on every visit.
 interface SourceStore {
   sources: string[]
+  /** Currently active source — persisted in localStorage */
   selected: string
   setSources: (s: string[]) => void
   setSelected: (s: string) => void
 }
 
-export const useSourceStore = create<SourceStore>((set) => ({
-  sources: [],
-  selected: '',
-  setSources: (sources) => set({ sources }),
-  setSelected: (selected) => set({ selected }),
-}))
+export const useSourceStore = create<SourceStore>()(
+  persist(
+    (set) => ({
+      sources: [],
+      selected: '',
+      setSources: (sources) => set({ sources }),
+      setSelected: (selected) => set({ selected }),
+    }),
+    {
+      name: 'fh2-source-ctx',
+      // Only persist `selected`; `sources` is always re-fetched from backend
+      partialize: (s) => ({ selected: s.selected }),
+    },
+  ),
+)
 
 // ─── Wizard store ─────────────────────────────────────────────────────────────
 const WIZARD_ORDER: WizardStep[] = [
@@ -52,12 +63,11 @@ interface WizardStore {
   canProceed: () => boolean
 }
 
-// Persisted wizard state (survives page refresh) — stored as plain arrays for JSON serialization
 interface WizardStorePersisted {
   active: boolean
   sourceId: string
   currentStep: WizardStep
-  completedStepsArr: WizardStep[]   // serializable form of Set<WizardStep>
+  completedStepsArr: WizardStep[]
 }
 
 export const useWizardStore = create<WizardStore>()(
@@ -70,10 +80,8 @@ export const useWizardStore = create<WizardStore>()(
 
       startWizard: (sourceId = '') =>
         set((state) => {
-          // If opening an existing source (same sourceId or previously completed), preserve completed steps
           const isSameSource = sourceId && state.sourceId === sourceId
           const existingCompleted = isSameSource ? state.completedSteps : new Set<WizardStep>()
-          // For any source that already exists, always mark create_source as completed
           const completedSteps = sourceId
             ? new Set<WizardStep>([...existingCompleted, 'create_source'])
             : new Set<WizardStep>()
@@ -106,7 +114,6 @@ export const useWizardStore = create<WizardStore>()(
     }),
     {
       name: 'fh2-wizard-state',
-      // Serialize Set → array and back
       partialize: (s) => ({
         active: s.active,
         sourceId: s.sourceId,
@@ -152,29 +159,17 @@ export const useUIStore = create<UIStore>((set, get) => ({
   removeToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
 }))
 
-// ─── Visual Mapping store ─────────────────────────────────────────────────────
-// Persisted per-source mapping in localStorage so refreshing doesn't lose work.
+// ─── Visual Mapping store — per-source isolated ───────────────────────────────
+// Draft mapping and sample payload are keyed by sourceId so different sources
+// never share the same draft. Switching source automatically loads that source's
+// own draft (or empty defaults).
+//
+// Schema of persisted data:
+//   drafts: { [sourceId]: { mapping: VisualMapping, samplePayload: string } }
 
-interface MappingStore {
-  /** normalized_field → fh2_body_path  e.g. { "event.name": "name", "device.id": "params.device_id" } */
+interface SourceDraft {
   mapping: VisualMapping
-  /** Available normalized field keys from last debug run */
-  normalizedFields: string[]
-  /** Live-computed FH2 preview body */
-  preview: FH2Body | null
-  /** Body paths that are required but unmapped/unfilled */
-  missing: string[]
-  /** Last sample payload JSON string used for debug run */
   samplePayload: string
-
-  setMapping: (m: VisualMapping) => void
-  setMappingField: (src: string, dst: string) => void
-  clearMappingField: (src: string) => void
-  setNormalizedFields: (fields: string[]) => void
-  setPreview: (body: FH2Body | null) => void
-  setMissing: (m: string[]) => void
-  setSamplePayload: (s: string) => void
-  resetMapping: () => void
 }
 
 const DEFAULT_SAMPLE = JSON.stringify({
@@ -187,34 +182,162 @@ const DEFAULT_SAMPLE = JSON.stringify({
   Event: { Name: 'VMD', Source: { Id: 'DJI-001' }, Level: 'warning' },
 }, null, 2)
 
+const EMPTY_DRAFT = (): SourceDraft => ({
+  mapping: {},
+  samplePayload: DEFAULT_SAMPLE,
+})
+
+interface MappingStore {
+  /** Current active sourceId — used to look up the draft */
+  activeSourceId: string
+  /** Per-source drafts  { [sourceId]: SourceDraft } */
+  drafts: Record<string, SourceDraft>
+  /** Whether draft differs from last-saved snapshot (dirty flag) */
+  isDirty: boolean
+  /** Snapshot of the last-saved mapping per source (for dirty comparison) */
+  savedSnapshots: Record<string, string>   // sourceId → JSON string of mapping
+
+  // Derived: current source's draft (read-only shortcuts)
+  mapping: VisualMapping
+  samplePayload: string
+
+  // Non-persisted runtime state
+  normalizedFields: string[]
+  preview: FH2Body | null
+  missing: string[]
+
+  // Actions
+  /** Call when the active source changes — loads or initialises the correct draft */
+  switchSource: (sourceId: string) => void
+  setMapping: (m: VisualMapping) => void
+  setMappingField: (src: string, dst: string) => void
+  clearMappingField: (src: string) => void
+  setSamplePayload: (s: string) => void
+  /** Call after a successful Save to clear dirty flag */
+  markSaved: () => void
+  setNormalizedFields: (fields: string[]) => void
+  setPreview: (body: FH2Body | null) => void
+  setMissing: (m: string[]) => void
+  resetMapping: () => void
+}
+
 export const useMappingStore = create<MappingStore>()(
   persist(
-    (set) => ({
-      mapping: {},
-      normalizedFields: [],
-      preview: null,
-      missing: [],
-      samplePayload: DEFAULT_SAMPLE,
+    (set, get) => {
+      // Helper: update the active source's draft and recalculate isDirty
+      const patchDraft = (patch: Partial<SourceDraft>) => {
+        const { activeSourceId, drafts, savedSnapshots } = get()
+        if (!activeSourceId) return
+        const current = drafts[activeSourceId] ?? EMPTY_DRAFT()
+        const next: SourceDraft = { ...current, ...patch }
+        const snapshot = savedSnapshots[activeSourceId] ?? ''
+        const isDirty = JSON.stringify(next.mapping) !== snapshot
+        set({
+          drafts: { ...drafts, [activeSourceId]: next },
+          mapping: next.mapping,
+          samplePayload: next.samplePayload,
+          isDirty,
+        })
+      }
 
-      setMapping: (mapping) => set({ mapping }),
-      setMappingField: (src, dst) =>
-        set((s) => ({ mapping: { ...s.mapping, [src]: dst } })),
-      clearMappingField: (src) =>
-        set((s) => {
-          const next = { ...s.mapping }
+      return {
+        activeSourceId: '',
+        drafts: {},
+        isDirty: false,
+        savedSnapshots: {},
+
+        // Derived shortcuts — synced from active draft
+        mapping: {},
+        samplePayload: DEFAULT_SAMPLE,
+
+        // Runtime (never persisted)
+        normalizedFields: [],
+        preview: null,
+        missing: [],
+
+        switchSource: (sourceId) => {
+          if (!sourceId) {
+            set({ activeSourceId: '', mapping: {}, samplePayload: DEFAULT_SAMPLE, isDirty: false })
+            return
+          }
+          const { drafts, savedSnapshots } = get()
+          const draft = drafts[sourceId] ?? EMPTY_DRAFT()
+          const snapshot = savedSnapshots[sourceId] ?? ''
+          set({
+            activeSourceId: sourceId,
+            mapping: draft.mapping,
+            samplePayload: draft.samplePayload,
+            isDirty: JSON.stringify(draft.mapping) !== snapshot,
+            // Reset runtime state when switching source
+            normalizedFields: [],
+            preview: null,
+            missing: [],
+          })
+        },
+
+        setMapping: (mapping) => patchDraft({ mapping }),
+        setMappingField: (src, dst) => {
+          const { mapping } = get()
+          patchDraft({ mapping: { ...mapping, [src]: dst } })
+        },
+        clearMappingField: (src) => {
+          const { mapping } = get()
+          const next = { ...mapping }
           delete next[src]
-          return { mapping: next }
-        }),
-      setNormalizedFields: (normalizedFields) => set({ normalizedFields }),
-      setPreview: (preview) => set({ preview }),
-      setMissing: (missing) => set({ missing }),
-      setSamplePayload: (samplePayload) => set({ samplePayload }),
-      resetMapping: () => set({ mapping: {}, preview: null, missing: [] }),
-    }),
+          patchDraft({ mapping: next })
+        },
+        setSamplePayload: (samplePayload) => patchDraft({ samplePayload }),
+
+        markSaved: () => {
+          const { activeSourceId, mapping, savedSnapshots } = get()
+          if (!activeSourceId) return
+          const snap = JSON.stringify(mapping)
+          set({ isDirty: false, savedSnapshots: { ...savedSnapshots, [activeSourceId]: snap } })
+        },
+
+        setNormalizedFields: (normalizedFields) => set({ normalizedFields }),
+        setPreview: (preview) => set({ preview }),
+        setMissing: (missing) => set({ missing }),
+
+        resetMapping: () => {
+          const { activeSourceId, drafts, savedSnapshots } = get()
+          if (!activeSourceId) return
+          const empty = EMPTY_DRAFT()
+          set({
+            drafts: { ...drafts, [activeSourceId]: empty },
+            mapping: empty.mapping,
+            samplePayload: empty.samplePayload,
+            isDirty: false,
+            savedSnapshots: { ...savedSnapshots, [activeSourceId]: '' },
+            preview: null,
+            missing: [],
+          })
+        },
+      }
+    },
     {
-      name: 'fh2-visual-mapping',
-      // Only persist mapping + samplePayload (not derived state)
-      partialize: (s) => ({ mapping: s.mapping, samplePayload: s.samplePayload }),
-    }
-  )
+      name: 'fh2-mapping-drafts',
+      // Only persist the draft data and saved snapshots; runtime state is excluded
+      partialize: (s) => ({
+        activeSourceId: s.activeSourceId,
+        drafts: s.drafts,
+        savedSnapshots: s.savedSnapshots,
+      }),
+      // On hydration, restore derived shortcuts from the active draft
+      merge: (persisted, current) => {
+        const p = persisted as Pick<MappingStore, 'activeSourceId' | 'drafts' | 'savedSnapshots'>
+        const draft = p.activeSourceId ? (p.drafts?.[p.activeSourceId] ?? EMPTY_DRAFT()) : EMPTY_DRAFT()
+        const snapshot = p.activeSourceId ? (p.savedSnapshots?.[p.activeSourceId] ?? '') : ''
+        return {
+          ...current,
+          activeSourceId: p.activeSourceId ?? '',
+          drafts: p.drafts ?? {},
+          savedSnapshots: p.savedSnapshots ?? {},
+          mapping: draft.mapping,
+          samplePayload: draft.samplePayload,
+          isDirty: JSON.stringify(draft.mapping) !== snapshot,
+        }
+      },
+    },
+  ),
 )

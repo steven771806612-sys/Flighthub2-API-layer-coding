@@ -1,14 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, Edit2, X, Check, MapPin, Fingerprint } from 'lucide-react'
+import { Plus, Trash2, Edit2, X, Check, MapPin, Fingerprint, AlertTriangle } from 'lucide-react'
 import { deviceService } from '@/services'
 import { useUIStore } from '@/store'
+import { useDirtyGuard } from '@/hooks/useDirtyGuard'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import type { DeviceInfo } from '@/types'
-
-// ─── Row state ────────────────────────────────────────────────────────────────
 
 interface DeviceRow extends DeviceInfo {
   _editing?: boolean
@@ -23,14 +22,12 @@ const EMPTY_DEVICE = (): DeviceRow => ({
   _isNew: true,
 })
 
-// ─── Component ────────────────────────────────────────────────────────────────
-
 export default function DevicePage() {
   const { addToast } = useUIStore()
   const qc = useQueryClient()
   const [rows, setRows] = useState<DeviceRow[]>([])
+  const { isDirty, markDirty, markClean } = useDirtyGuard()
 
-  // Load device list + details
   const { data: deviceQueryData } = useQuery({
     queryKey: ['device-list'],
     queryFn: async () => {
@@ -38,30 +35,30 @@ export default function DevicePage() {
       const details = await Promise.all(ids.map((id) => deviceService.get(id)))
       return details.map((d, i) => ({ ...d, device_id: d.device_id || ids[i] }))
     },
-    staleTime: 0,
+    // 30s stale time — reload on focus won't stomp on user's in-progress edits
+    staleTime: 30_000,
   })
 
+  // Sync rows from server ONLY when not in the middle of editing
   useEffect(() => {
-    if (deviceQueryData) {
+    if (deviceQueryData && !isDirty) {
       setRows(deviceQueryData.map((d) => ({ ...d, _editing: false, _isNew: false })))
     }
-  }, [deviceQueryData])
+  }, [deviceQueryData, isDirty])
 
-  // Save one device
   const { mutate: saveOne } = useMutation({
     mutationFn: (row: DeviceRow) => deviceService.set(row.device_id, row),
     onSuccess: (_data, row) => {
       addToast('success', `Device ${row.device_id} saved`)
-      setRows((prev) => prev.map((r) => r.device_id === row.device_id
-        ? { ...r, _editing: false, _isNew: false }
-        : r
+      setRows((prev) => prev.map((r) =>
+        r.device_id === row.device_id ? { ...r, _editing: false, _isNew: false } : r
       ))
+      markClean()
       qc.invalidateQueries({ queryKey: ['device-list'] })
     },
     onError: (e: Error) => addToast('error', e.message),
   })
 
-  // Delete
   const { mutate: deleteOne } = useMutation({
     mutationFn: (id: string) => deviceService.delete(id),
     onSuccess: (_data, id) => {
@@ -72,10 +69,15 @@ export default function DevicePage() {
     onError: (e: Error) => addToast('error', e.message),
   })
 
-  const addRow = () => setRows((prev) => [...prev, EMPTY_DEVICE()])
+  const addRow = () => {
+    setRows((prev) => [...prev, EMPTY_DEVICE()])
+    markDirty()
+  }
 
-  const startEdit = (id: string) =>
+  const startEdit = (id: string) => {
     setRows((prev) => prev.map((r) => r.device_id === id ? { ...r, _editing: true } : r))
+    markDirty()
+  }
 
   const cancelEdit = (row: DeviceRow) => {
     if (row._isNew) {
@@ -83,6 +85,9 @@ export default function DevicePage() {
     } else {
       setRows((prev) => prev.map((r) => r.device_id === row.device_id ? { ...r, _editing: false } : r))
     }
+    // Only mark clean if no other rows are being edited
+    const still = rows.filter((r) => r !== row && r._editing)
+    if (!still.length) markClean()
   }
 
   const updateRow = (idx: number, path: string, val: string) => {
@@ -98,9 +103,11 @@ export default function DevicePage() {
     })
   }
 
+  // Count editing rows for the dirty banner
+  const editingCount = rows.filter((r) => r._editing).length
+
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
         <h1 className="text-xl font-semibold text-gray-900">Devices</h1>
         <p className="text-sm text-gray-500 mt-1">
@@ -112,7 +119,15 @@ export default function DevicePage() {
         </p>
       </div>
 
-      {/* Table */}
+      {/* Dirty banner */}
+      {editingCount > 0 && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          {editingCount} row{editingCount > 1 ? 's' : ''} with unsaved changes — click ✓ to save each row.
+          Navigating away will lose unsaved edits.
+        </div>
+      )}
+
       <Card
         title="Device Registry"
         description="存储为 uw:device:{value}，其中 value 为 payload 中 Device ID Field 字段的实际内容"
@@ -122,7 +137,6 @@ export default function DevicePage() {
           </Button>
         }
       >
-        {/* Table header */}
         <div className="grid grid-cols-[2fr_2fr_1.2fr_1.2fr_auto] gap-3 mb-2 px-1">
           {['Device ID 字段值 *', '备注 (Model)', 'Latitude', 'Longitude', ''].map((h) => (
             <span key={h} className="text-xs font-medium text-gray-500">{h}</span>
@@ -168,12 +182,14 @@ export default function DevicePage() {
                       onClick={() => saveOne(row)}
                       disabled={!row.device_id.trim()}
                       className="w-8 h-8 flex items-center justify-center rounded-lg text-emerald-600 hover:bg-emerald-50 disabled:opacity-40 transition-colors"
+                      title="Save"
                     >
                       <Check className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => cancelEdit(row)}
                       className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 transition-colors"
+                      title="Cancel"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -210,7 +226,6 @@ export default function DevicePage() {
         </div>
       </Card>
 
-      {/* GPS info card */}
       <Card title="How GPS Enrichment Works">
         <div className="space-y-3 text-sm text-gray-600">
           <div className="flex items-start gap-3">
@@ -226,11 +241,9 @@ export default function DevicePage() {
             <MapPin className="w-4 h-4 text-teal-600 mt-0.5 shrink-0" />
             <div>
               <p className="font-medium text-gray-700 mb-1">Step 2 — Registry Lookup (this page)</p>
-              <p>The resolved device ID value is matched against the <strong>Device ID</strong> column above.
+              <p>The resolved device ID value is matched against the <strong>Device ID 字段值</strong> column above.
                 If found, coordinates are injected into the FH2 body:</p>
-              <pre className="text-xs font-mono bg-gray-900 text-emerald-400 p-2 rounded mt-2">{`params.latitude  = device.location.lat
-params.longitude = device.location.lng`}</pre>
-              <p className="mt-2 text-gray-400 text-xs">The <strong>Device ID</strong> value must exactly match the actual payload value (not a field path).</p>
+              <pre className="text-xs font-mono bg-gray-900 text-emerald-400 p-2 rounded mt-2">{`params.latitude  = device.location.lat\nparams.longitude = device.location.lng`}</pre>
             </div>
           </div>
         </div>

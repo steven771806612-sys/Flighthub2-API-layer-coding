@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { egressService, tokenService } from '@/services'
 import { useUIStore } from '@/store'
+import { useDirtyGuard } from '@/hooks/useDirtyGuard'
 import { Card } from '@/components/ui/Card'
 import { Input, Textarea } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
@@ -31,7 +32,6 @@ const DEFAULT_EGRESS: EgressConfig = {
   retry_policy: { max_retries: 3, backoff: 'exponential' },
 }
 
-// ─── Sensitive field masking ──────────────────────────────────────────────────
 function SensitiveInput({
   label, value, onChange, placeholder, hint,
 }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; hint?: string }) {
@@ -63,7 +63,6 @@ function SensitiveInput({
   )
 }
 
-// ─── Main Component ───────────────────────────────────────────────────────────
 interface FormValues {
   endpoint: string
   userToken: string
@@ -72,14 +71,15 @@ interface FormValues {
   templateBodyJson: string
   maxRetries: number
   backoff: 'exponential' | 'linear'
-  // Token extractor paste field
   rawPaste: string
 }
 
 export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
   const { addToast } = useUIStore()
+  const qc = useQueryClient()
   const [extractResult, setExtractResult] = useState<Record<string, string>>({})
   const [extractStatus, setExtractStatus] = useState<'idle'|'ok'|'err'>('idle')
+  const { isDirty, markDirty, markClean } = useDirtyGuard()
 
   const { register, handleSubmit, setValue, watch, reset, formState: { errors } } =
     useForm<FormValues>({
@@ -95,16 +95,20 @@ export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
       },
     })
 
-  // Load existing config — use useEffect instead of onSuccess (TanStack Query v5 removed onSuccess)
+  // Load existing config — staleTime 30s: don't re-fetch just because the user
+  // navigated away briefly. Invalidate explicitly after save.
   const { data: existingConfig } = useQuery({
     queryKey: ['egress', sourceId],
     queryFn: () => egressService.get(sourceId),
     enabled: !!sourceId,
-    staleTime: 0,
+    staleTime: 30_000,
   })
 
+  // Populate form from server data ONLY when data first arrives (or sourceId changes).
+  // We intentionally do NOT reset on every render to avoid overwriting user edits.
+  const [loadedFor, setLoadedFor] = useState<string>('')
   useEffect(() => {
-    if (existingConfig) {
+    if (existingConfig && sourceId !== loadedFor) {
       const cfg = existingConfig
       reset({
         endpoint: cfg.endpoint,
@@ -116,10 +120,19 @@ export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
         backoff: cfg.retry_policy.backoff,
         rawPaste: '',
       })
+      setLoadedFor(sourceId)
+      markClean()  // fresh from server — not dirty
     }
-  }, [existingConfig, reset])
+  }, [existingConfig, sourceId, loadedFor, reset, markClean])
 
-  // Save
+  // Mark dirty when the user changes any field
+  useEffect(() => {
+    const sub = watch(() => {
+      if (loadedFor === sourceId) markDirty()
+    })
+    return () => sub.unsubscribe()
+  }, [watch, markDirty, loadedFor, sourceId])
+
   const { mutate: save, isPending } = useMutation({
     mutationFn: (d: FormValues) => {
       let template_body = DEFAULT_EGRESS.template_body
@@ -136,11 +149,15 @@ export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
       }
       return egressService.set(sourceId, cfg)
     },
-    onSuccess: () => addToast('success', 'Egress config saved'),
+    onSuccess: () => {
+      addToast('success', 'Egress config saved')
+      markClean()
+      qc.invalidateQueries({ queryKey: ['egress', sourceId] })
+      setLoadedFor('')  // allow reload on next visit
+    },
     onError: (e: Error) => addToast('error', e.message),
   })
 
-  // Token extractor
   const { mutate: extract, isPending: extracting } = useMutation({
     mutationFn: () => tokenService.extract(watch('rawPaste')),
     onSuccess: (extracted) => {
@@ -159,11 +176,16 @@ export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
 
   return (
     <div className="space-y-4">
-      {/* ── Main config ─────────────────────────────────────────────────── */}
+      {/* Dirty indicator */}
+      {isDirty && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+          未保存的修改 — 请记得点击「Save Egress Config」保存
+        </div>
+      )}
+
       <Card title="FlightHub2 Egress Configuration" description="Downstream API endpoint and authentication">
         <form onSubmit={handleSubmit((d) => save(d))} className="space-y-5">
-
-          {/* Endpoint */}
           <Input
             label="API Endpoint"
             placeholder="https://..."
@@ -171,7 +193,6 @@ export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
             {...register('endpoint', { required: 'Required', pattern: { value: /^https?:\/\//, message: 'Must be a URL' } })}
           />
 
-          {/* Sensitive headers */}
           <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg space-y-3">
             <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide">🔐 Sensitive Credentials</p>
             <SensitiveInput
@@ -194,7 +215,6 @@ export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
             />
           </div>
 
-          {/* Template body */}
           <Textarea
             label="Template Body (JSON with {{variable}} placeholders)"
             rows={10}
@@ -205,14 +225,8 @@ export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
             })}
           />
 
-          {/* Retry policy */}
           <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="Max Retries"
-              type="number"
-              min={0} max={10}
-              {...register('maxRetries')}
-            />
+            <Input label="Max Retries" type="number" min={0} max={10} {...register('maxRetries')} />
             <div className="flex flex-col gap-1">
               <label className="text-sm font-medium text-gray-700">Backoff Strategy</label>
               <select
@@ -229,11 +243,7 @@ export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
         </form>
       </Card>
 
-      {/* ── Token extractor ──────────────────────────────────────────────── */}
-      <Card
-        title="Token Extractor"
-        description="Paste raw HTTP headers / curl commands / JSON — auto-extract FlightHub2 tokens"
-      >
+      <Card title="Token Extractor" description="Paste raw HTTP headers / curl commands / JSON — auto-extract FlightHub2 tokens">
         <div className="space-y-3">
           <Textarea
             placeholder={'X-User-Token: xxx\nx-project-uuid: yyy\nworkflow_uuid=zzz\n\nor paste a full curl command'}
@@ -241,15 +251,9 @@ export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
             mono
             {...register('rawPaste')}
           />
-          <Button
-            type="button"
-            variant="secondary"
-            loading={extracting}
-            onClick={() => extract()}
-          >
+          <Button type="button" variant="secondary" loading={extracting} onClick={() => extract()}>
             <Wand2 className="w-4 h-4" /> Extract & Apply
           </Button>
-
           {extractStatus !== 'idle' && (
             <div className={`flex items-center gap-2 text-sm ${extractStatus === 'ok' ? 'text-emerald-600' : 'text-red-600'}`}>
               {extractStatus === 'ok'
