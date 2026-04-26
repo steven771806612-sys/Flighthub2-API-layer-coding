@@ -2,7 +2,7 @@
 
 > A universal webhook middleware for DJI FlightHub2 — receives third-party alarm webhooks, processes them through a standardised pipeline, and forwards the result to the FlightHub2 Workflow API.
 
-**Version:** v6.9 · **Last updated:** 2026-04-03  
+**Version:** v6.9 · **Last updated:** 2026-04-26  
 **GitHub:** https://github.com/steven771806612-sys/Flighthub2-API-layer-coding
 
 ---
@@ -232,6 +232,11 @@ webapp/
 │       ├── store/           Zustand stores (source, mapping, wizard, UI)
 │       ├── services/        API service layer (18 endpoints)
 │       └── types/           TypeScript type definitions
+├── universal-webhook-poc/   Lightweight Redis-only sandbox POC
+│   ├── app/                 FastAPI app (mapping / template / auth)
+│   ├── worker/              Async Redis Stream consumer
+│   ├── scripts/             Start scripts + E2E test
+│   └── README.md            POC-specific documentation
 ├── deploy/
 │   ├── supervisord.conf     Process supervisor config
 │   └── entrypoint.sh        Docker start script
@@ -337,10 +342,33 @@ curl -X POST http://localhost:8000/webhook \
 
 ---
 
+## Sub-Projects
+
+### `universal-webhook-poc/` — Lightweight Sandbox POC
+
+> Added: 2026-03-18
+
+A self-contained proof-of-concept that runs the core pipeline without any build tooling or Kafka infrastructure. Designed for rapid sandbox testing and onboarding.
+
+| Aspect | Details |
+|--------|---------|
+| **Queue** | Redis Streams only (no Kafka dependency) |
+| **API** | FastAPI · same `/webhook` + `/admin/*` contract |
+| **UI** | Static HTML served at `/ui/` (no npm build) |
+| **Worker** | Async `XREADGROUP` consumer (×2 parallel) |
+| **Pipeline** | mapping → template render → HTTP POST to FH2 |
+| **Auth** | Per-source inbound static token (`X-MW-Token`) |
+| **Start** | `bash universal-webhook-poc/scripts/sandbox_test.sh` |
+
+See [`universal-webhook-poc/README.md`](universal-webhook-poc/README.md) for full setup instructions.
+
+---
+
 ## Changelog
 
 | Version | Key changes |
 |---------|-------------|
+| **POC** | Added `universal-webhook-poc/` — Redis-Streams-only sandbox spike; static HTML UI; inbound auth gate; full E2E test script |
 | **v6.9** | Source context persistence (localStorage); per-source mapping draft isolation; `useDirtyGuard` hook for all form pages; MappingPage & Sidebar dirty-switch confirmation; no-source guard on Mapping/Egress pages |
 | **v6.8** | Real-time mapping preview: unsaved visual mappings passed to `debug/run` as `mapping_override` |
 | **v6.7** | Autofill fixes: empty-string passthrough, dot-path aliases (`params.latitude`), level string → integer conversion |

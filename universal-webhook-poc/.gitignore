@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+logs/
+data/
+bin/
+rpk/
+redpanda/
+kafka_cluster_id.txt
+*.pid
+*.log
