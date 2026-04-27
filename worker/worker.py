@@ -151,6 +151,23 @@ async def run():
                 if status and status >= 400:
                     print(f"[worker] response: {text[:300]}")
 
+                # ── Persist processing log entry to Redis ──────────────────────
+                try:
+                    log_entry = {
+                        "ts": _now_ts(),
+                        "source": source,
+                        "msg_id": msg_id,
+                        "http_status": status,
+                        "fh2_response": text[:500] if text else "",
+                        "body_name": body.get("name", "") if isinstance(body, dict) else "",
+                        "workflow_uuid": body.get("workflow_uuid", "") if isinstance(body, dict) else "",
+                        "missing_fields": missing_fields,
+                        "ok": bool(status and 200 <= status < 300),
+                    }
+                    await repo.append_log(source, log_entry)
+                except Exception as log_exc:
+                    print(f"[worker] log_write_error: {log_exc}")
+
                 await redis.xack(settings.STREAM_KEY_RAW, settings.STREAM_GROUP, msg_id)
 
 

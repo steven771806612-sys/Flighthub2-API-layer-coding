@@ -49,7 +49,7 @@ export default function SourcesPage() {
           Create a source to get a webhook ingress endpoint, then configure auth and proceed to mapping.
           {selected && (
             <span className="ml-2 inline-flex items-center gap-1 text-brand-600 font-medium text-xs">
-              — 当前 Source：<code className="font-mono">{selected}</code>
+              — Active: <code className="font-mono">{selected}</code>
             </span>
           )}
         </p>

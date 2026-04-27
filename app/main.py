@@ -107,13 +107,15 @@ def _require_source_auth(source: str, request: Request, srcauth: dict):
     """Inbound auth: only authenticated requests can enter queue.
 
     Current POC supports: mode=static_token.
+    When auth is disabled (enabled=False), all requests are allowed through.
     """
     if not isinstance(srcauth, dict) or not srcauth:
         raise HTTPException(status_code=401, detail=f"source_not_registered_or_auth_missing: {source}")
 
     enabled = bool(srcauth.get("enabled", True))
+    # When authentication is disabled, allow all requests through
     if not enabled:
-        raise HTTPException(status_code=403, detail=f"source_disabled: {source}")
+        return
 
     mode = (srcauth.get("mode") or "static_token").lower()
     if mode != "static_token":
@@ -618,3 +620,42 @@ async def debug_run(payload: dict[str, Any], x_admin_token: str | None = Header(
 
     except Exception as exc:
         return {"status": "error", "message": str(exc), **stages}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# LOGS  — worker processing logs stored in Redis lists
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.post("/admin/logs/get")
+async def logs_get(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Retrieve recent processing logs.
+
+    Input:  { source?: str, limit?: int }
+            source=null / omit → return global log (all sources)
+    Output: { status, logs: [...] }
+    """
+    global repo
+    assert repo is not None
+    _require_admin(x_admin_token)
+
+    source: str | None = payload.get("source") or None
+    limit = int(payload.get("limit") or 100)
+    limit = max(1, min(limit, 500))
+
+    logs = await repo.get_logs(source, limit)
+    return {"status": "ok", "source": source, "logs": logs}
+
+
+@app.post("/admin/logs/clear")
+async def logs_clear(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Clear log list for a source (or global list if source omitted).
+
+    Input:  { source?: str }
+    """
+    global repo
+    assert repo is not None
+    _require_admin(x_admin_token)
+
+    source: str | None = payload.get("source") or None
+    deleted = await repo.clear_logs(source)
+    return {"status": "ok", "source": source, "deleted": deleted}

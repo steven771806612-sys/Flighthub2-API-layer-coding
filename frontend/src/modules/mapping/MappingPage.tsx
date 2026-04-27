@@ -24,7 +24,7 @@ export default function MappingPage() {
     const handler = (e: BeforeUnloadEvent) => {
       if (!isDirty) return
       e.preventDefault()
-      e.returnValue = '映射草稿未保存，离开将丢失更改。'
+      e.returnValue = 'Mapping draft not saved — leaving will discard changes.'
       return e.returnValue
     }
     window.addEventListener('beforeunload', handler)
@@ -44,7 +44,7 @@ export default function MappingPage() {
               {isDirty && (
                 <span className="inline-flex items-center gap-1 ml-1 text-amber-600">
                   <AlertTriangle className="w-3 h-3" />
-                  草稿未保存
+                  Unsaved Draft
                 </span>
               )}
             </span>
@@ -57,9 +57,9 @@ export default function MappingPage() {
         <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 py-16 flex flex-col items-center gap-4 text-center">
           <Layers className="w-10 h-10 text-gray-300" />
           <div>
-            <p className="text-sm font-medium text-gray-600">未选择 Source</p>
+            <p className="text-sm font-medium text-gray-600">No Source Selected</p>
             <p className="text-xs text-gray-400 mt-1">
-              请在左侧边栏切换 Source，或前往 Sources 页面创建一个。
+              Switch source in the left sidebar, or go to the Sources page to create one.
             </p>
           </div>
           <Button variant="secondary" size="sm" onClick={() => navigate('/sources')}>

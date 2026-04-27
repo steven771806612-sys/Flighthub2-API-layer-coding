@@ -121,3 +121,46 @@ class RedisRepo:
         """Persist device ID field config for *source*."""
         await self.redis.set(self._k_device_id_field(source), json.dumps(field, ensure_ascii=False))
 
+    # ── Processing Logs ───────────────────────────────────────────────────────
+    # Stored as a Redis List (LPUSH + LTRIM) under uw:logs:{source}
+    # Each entry is a JSON-encoded dict with keys:
+    #   ts, source, msg_id, http_status, fh2_response, body_summary, missing, error
+    # Global log list: uw:logs:_all_ keeps the last MAX_GLOBAL_LOGS across all sources
+
+    _MAX_LOGS_PER_SOURCE = 200
+    _MAX_GLOBAL_LOGS = 500
+    _LOG_KEY_GLOBAL = "uw:logs:_all_"
+
+    @staticmethod
+    def _k_logs(source: str) -> str:
+        return f"uw:logs:{source}"
+
+    async def append_log(self, source: str, entry: dict) -> None:
+        """Prepend a log entry (newest-first) to the per-source and global log lists."""
+        import json as _json
+        serialized = _json.dumps(entry, ensure_ascii=False)
+        pipe = self.redis.pipeline()
+        pipe.lpush(self._k_logs(source), serialized)
+        pipe.ltrim(self._k_logs(source), 0, self._MAX_LOGS_PER_SOURCE - 1)
+        pipe.lpush(self._LOG_KEY_GLOBAL, serialized)
+        pipe.ltrim(self._LOG_KEY_GLOBAL, 0, self._MAX_GLOBAL_LOGS - 1)
+        await pipe.execute()
+
+    async def get_logs(self, source: str | None, limit: int = 100) -> list[dict]:
+        """Return the most recent *limit* log entries for *source* (or all sources)."""
+        import json as _json
+        key = self._LOG_KEY_GLOBAL if not source else self._k_logs(source)
+        raws = await self.redis.lrange(key, 0, limit - 1)
+        out = []
+        for r in raws:
+            try:
+                out.append(_json.loads(r))
+            except Exception:
+                pass
+        return out
+
+    async def clear_logs(self, source: str | None) -> int:
+        """Delete log list for *source* (or the global list if source is None)."""
+        key = self._LOG_KEY_GLOBAL if not source else self._k_logs(source)
+        return await self.redis.delete(key)
+

@@ -180,7 +180,7 @@ export function EgressConfigPanel({ sourceId }: { sourceId: string }) {
       {isDirty && (
         <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-          未保存的修改 — 请记得点击「Save Egress Config」保存
+          Unsaved changes — remember to click "Save Egress Config" to save
         </div>
       )}
 

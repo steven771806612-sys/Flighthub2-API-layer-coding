@@ -6,17 +6,17 @@
  *  RIGHT — debug/run pipeline preview showing the exact FH2 API body
  *          that would be sent, plus per-stage breakdown
  */
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
-import { useMutation } from '@tanstack/react-query'
-import { runIntegrationTest, debugService } from '@/services'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { runIntegrationTest, debugService, authService } from '@/services'
 import { Card } from '@/components/ui/Card'
 import { Input, Textarea } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import {
   CheckCircle, XCircle, FlaskConical, Play,
   ChevronDown, ChevronRight, Copy, CheckCheck,
-  AlertTriangle, Info,
+  AlertTriangle, Info, ShieldOff,
 } from 'lucide-react'
 import type { TestResult } from '@/services'
 import type { DebugResult, FH2Body } from '@/types'
@@ -76,7 +76,8 @@ function FH2Preview({ body, missing }: { body: FH2Body | undefined; missing?: st
     return (
       <div className="flex items-center justify-center h-full text-gray-400 text-sm gap-2">
         <Play className="w-4 h-4 opacity-40" />
-        运行 Pipeline Preview 后显示报文
+        Run Pipeline Preview first to see the request body here
+          {/* Run Pipeline Preview to see the request body */}
       </div>
     )
   }
@@ -97,7 +98,8 @@ function FH2Preview({ body, missing }: { body: FH2Body | undefined; missing?: st
         <div className="flex items-start gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
           <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           <span>
-            <strong>缺少必填字段：</strong>
+            {/* <strong>Missing required fields:</strong> */}
+              <strong>Missing required fields:</strong>
             {missing.map((f) => (
               <code key={f} className="mx-0.5 bg-amber-100 px-1 rounded font-mono">{f}</code>
             ))}
@@ -107,7 +109,8 @@ function FH2Preview({ body, missing }: { body: FH2Body | undefined; missing?: st
       {!hasMissing && (
         <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-700">
           <CheckCircle className="w-3.5 h-3.5 shrink-0" />
-          所有必填字段已覆盖，报文可正常发送
+          All required fields covered — message is ready to send
+            {/* All required fields are present — ready to send */}
         </div>
       )}
 
@@ -154,9 +157,26 @@ export function IntegrationTest({ sourceId }: { sourceId: string }) {
   const [queueResult, setQueueResult] = useState<TestResult | null>(null)
   const [debugResult, setDebugResult] = useState<DebugResult | null>(null)
 
-  const { register, handleSubmit, watch, formState: { errors } } = useForm<FormValues>({
+  // ── Fetch auth config to determine if token is required ──────────────────
+  const { data: authConfig } = useQuery({
+    queryKey: ['auth', sourceId],
+    queryFn: () => authService.get(sourceId),
+    enabled: !!sourceId,
+    staleTime: 0,
+  })
+
+  const authEnabled = authConfig?.enabled ?? true  // default to requiring token if unknown
+
+  const { register, handleSubmit, watch, formState: { errors }, setValue } = useForm<FormValues>({
     defaultValues: { ingressToken: '', webhookEventJson: SAMPLE_EVENT },
   })
+
+  // When auth is disabled, clear token field automatically
+  useEffect(() => {
+    if (!authEnabled) {
+      setValue('ingressToken', '')
+    }
+  }, [authEnabled, setValue])
 
   // ── Debug/run — preview pipeline without enqueuing ────────────────────────
   const { mutate: runPreview, isPending: previewing } = useMutation({
@@ -184,14 +204,24 @@ export function IntegrationTest({ sourceId }: { sourceId: string }) {
 
       {/* ── LEFT: form + queue result ──────────────────────────────────────── */}
       <div className="space-y-4">
-        <Card title="Integration Test" description="发送测试事件并检查 Pipeline 全流程">
+        <Card title="Integration Test" description="Send a test event and verify the full pipeline"  >
           <div className="space-y-4">
-            <Input
-              label="Ingress Token (X-MW-Token)"
-              placeholder="Step 2 中配置的 token"
-              error={errors.ingressToken?.message}
-              {...register('ingressToken', { required: 'Required' })}
-            />
+            {/* Auth-disabled notice */}
+            {!authEnabled && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
+                <ShieldOff className="w-3.5 h-3.5 shrink-0" />
+                {/* Ingress authentication is disabled — no token required, all requests pass through */}
+            <span>Ingress authentication is disabled — no token required, all requests will be allowed through</span>
+              </div>
+            )}
+            {authEnabled && (
+              <Input
+                label={`Ingress Token (${authConfig?.header_name ?? 'X-MW-Token'})`}
+                placeholder="Token configured in Step 2"  
+                error={errors.ingressToken?.message}
+                {...register('ingressToken', { required: authEnabled ? 'Required' : false })}
+              />
+            )}
             <Textarea
               label="Sample webhook_event (JSON)"
               rows={9}
@@ -232,7 +262,8 @@ export function IntegrationTest({ sourceId }: { sourceId: string }) {
 
         {/* Queue result */}
         {queueResult && (
-          <Card title="Webhook 入队结果">
+          
+          <Card title="Webhook Queue Result">
             <div className="space-y-2">
               <ResultRow
                 ok={queueResult.authStatus === 200}
@@ -253,7 +284,8 @@ export function IntegrationTest({ sourceId }: { sourceId: string }) {
                 <div className="mt-2 p-3 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-2 text-sm">
                   <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span className="text-emerald-700 font-medium">
-                    事件已入队 — Worker 将完成映射并推送至 FlightHub2
+                    
+                    Event enqueued — Worker will complete mapping and push to FlightHub2
                   </span>
                 </div>
               )}
@@ -263,13 +295,14 @@ export function IntegrationTest({ sourceId }: { sourceId: string }) {
 
         {/* Pipeline stages breakdown */}
         {debugResult && (
-          <Card title="Pipeline 各阶段数据">
+          
+          <Card title="Pipeline Stage Data">
             <div className="space-y-2">
-              <StageBlock label="① Raw (原始 payload)"        data={debugResult.raw}        accent="gray" />
-              <StageBlock label="② Flat (展开后)"             data={debugResult.flat}       accent="gray" />
-              <StageBlock label="③ Normalized (规范化)"       data={debugResult.normalized}  accent="blue" />
-              <StageBlock label="④ Mapped (字段映射结果)"     data={debugResult.mapped}      accent="blue" />
-              <StageBlock label="⑤ Event (规范事件)"          data={debugResult.event}       accent="amber" />
+              <StageBlock label="① Raw Input"        data={debugResult.raw}        accent="gray" />
+              <StageBlock label="② Flat (Flattened)"             data={debugResult.flat}       accent="gray" />
+              <StageBlock label="③ Normalized"       data={debugResult.normalized}  accent="blue" />
+              <StageBlock label="④ Mapped (Field Mapping Result)"     data={debugResult.mapped}      accent="blue" />
+              <StageBlock label="⑤ Event (Canonical Event)"          data={debugResult.event}       accent="amber" />
             </div>
             {debugResult.message && (
               <div className="mt-3 flex items-start gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -286,11 +319,12 @@ export function IntegrationTest({ sourceId }: { sourceId: string }) {
         <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-col gap-3 min-h-[480px]">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-emerald-500" />
-            <h3 className="text-sm font-semibold text-gray-800">最终 FH2 API 报文</h3>
+            
+            <h3 className="text-sm font-semibold text-gray-800">Final FH2 API Request Body</h3>
             <span className="text-xs text-gray-400 ml-auto">
               {debugResult
-                ? <span className="text-emerald-600 font-medium">✓ 预览已生成</span>
-                : '点击 Pipeline Preview 生成'}
+              ? <span className="text-emerald-600 font-medium">✓ Preview generated</span> 
+              : 'Click Pipeline Preview to generate' }
             </span>
           </div>
 
@@ -298,8 +332,10 @@ export function IntegrationTest({ sourceId }: { sourceId: string }) {
           {!debugResult && (
             <div className="flex items-start gap-2 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700">
               <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-              点击左侧 <strong>Pipeline Preview</strong> 按钮，即可在此处看到 Worker 最终会发送给 FlightHub2 的完整 HTTP 请求体。
-              无需提供 Ingress Token，不会入队。
+              
+              Click <strong>Pipeline Preview</strong> on the left to see the complete HTTP request body that the Worker will send to FlightHub2.
+              No Ingress Token required — payload will not be queued.
+              
             </div>
           )}
 
@@ -314,7 +350,8 @@ export function IntegrationTest({ sourceId }: { sourceId: string }) {
         {/* HTTP headers reference */}
         {debugResult?.final_body && (
           <div className="bg-gray-900 rounded-xl p-4 text-xs font-mono space-y-1">
-            <p className="text-gray-400 mb-2 font-sans font-semibold text-xs">HTTP Headers (来自 Egress 配置)</p>
+            {/* HTTP Headers (from Egress configuration) */}
+              <p className="text-gray-400 mb-2 font-sans font-semibold text-xs">HTTP Headers (from Egress config)</p>
             <p><span className="text-blue-300">Content-Type</span>: <span className="text-emerald-300">application/json</span></p>
             <p><span className="text-blue-300">X-User-Token</span>: <span className="text-gray-500">{'<configured>'}</span></p>
             <p><span className="text-blue-300">x-project-uuid</span>: <span className="text-gray-500">{'<configured>'}</span></p>

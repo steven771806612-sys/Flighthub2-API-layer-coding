@@ -21,10 +21,10 @@ ENV/
 .env.*
 .dev.vars
 
-# Logs & PIDs
-logs/
+# Logs & PIDs (exclude source module directories)
 *.log
 *.pid
+/logs/
 
 # PM2
 .pm2/

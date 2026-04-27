@@ -1,12 +1,13 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Layers, ArrowRightLeft, Settings, Zap, Cpu, ChevronDown } from 'lucide-react'
+import { LayoutDashboard, Layers, ArrowRightLeft, Settings, Zap, Cpu, ChevronDown, ScrollText } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSourceStore, useMappingStore } from '@/store'
 import { sourceService } from '@/services'
 
-const DIRTY_CONFIRM_MSG = '当前 Source 的映射草稿未保存，切换 Source 后草稿仍会保留（每个 Source 独立保存），但未保存的预览结果将会丢失。\n\n确认切换 Source 吗？'
+// Confirm message shown when switching source with unsaved mapping draft
+const DIRTY_CONFIRM_MSG = 'The current mapping draft has not been saved. Drafts are kept per-source, but unsaved preview results will be lost.\n\nSwitch source anyway?'
 
 const NAV = [
   { to: '/',        label: 'Dashboard',       icon: LayoutDashboard },
@@ -14,6 +15,7 @@ const NAV = [
   { to: '/mapping', label: 'Visual Mapper',    icon: ArrowRightLeft },
   { to: '/egress',  label: 'Egress',           icon: Settings },
   { to: '/device',  label: 'Devices',          icon: Cpu },
+  { to: '/logs',    label: 'Logs',             icon: ScrollText },
   { to: '/wizard',  label: 'New Integration',  icon: Zap },
 ]
 

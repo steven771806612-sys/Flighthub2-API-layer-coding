@@ -74,12 +74,12 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
 
   const tokenValue = watch('token')
 
-  // ── 加载已有配置（只填 header_name 和 enabled；token 后端已脱敏，留空让用户主动输入）
+  // Load existing config (only header_name and enabled are restored; backend masks the token, so token field is left blank for user to re-enter)
   const { data: existingAuth } = useQuery({
     queryKey: ['auth', sourceId],
     queryFn: () => authService.get(sourceId),
     enabled: !!sourceId,
-    // staleTime: 0 确保每次 sourceId 变化都重新拉取
+    // staleTime: 0 ensures re-fetch whenever sourceId changes
     staleTime: 0,
   })
 
@@ -88,13 +88,13 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
       reset({
         enabled: existingAuth.enabled ?? true,
         header_name: existingAuth.header_name ?? 'X-MW-Token',
-        token: '', // 不回填脱敏值，强迫用户主动输入新 token 才会覆盖
+        token: '', // Do not pre-fill the masked token — user must explicitly enter a new one to overwrite
       })
       markClean()
     }
   }, [existingAuth, reset, markClean])
 
-  // 是否已有 token（后端返回的脱敏值包含 ****)
+  // Whether a token is already set (backend returns masked value containing ****)
   const hasExistingToken = !!(existingAuth?.token && existingAuth.token.length > 0)
 
   const { mutate, isPending } = useMutation({
@@ -103,15 +103,15 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
         enabled: d.enabled,
         mode: 'static_token',
         header_name: d.header_name,
-        // 如果 token 为空，说明用户不想修改，不传 token 字段（后端保留原值）
-        // 如果非空，才覆盖
+        // If token is empty, user does not want to change it — omit token field so backend keeps the existing value
+        // Only send token field when non-empty
         ...(d.token.trim() ? { token: d.token.trim() } : {}),
       }
       return authService.set(sourceId, payload)
     },
     onSuccess: () => {
       addToast('success', 'Ingress auth saved')
-      setValue('token', '') // 保存后清空，避免意外重复提交
+      setValue('token', '') // Clear token field after save to prevent accidental re-submission
       markClean()
     },
     onError: (e: Error) => addToast('error', e.message),
@@ -134,7 +134,7 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
       {isDirty && (
         <div className="flex items-center gap-2 px-3 py-2 mb-4 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
           <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-          未保存的修改 — 请点击「Save Auth Config」保存
+Unsaved changes — please click "Save Auth Config" to save
         </div>
       )}
       <form onSubmit={handleSubmit((d) => mutate(d))} className="space-y-4">
@@ -163,9 +163,9 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
               <input
                 type={showToken ? 'text' : 'password'}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono pr-10 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                placeholder={hasExistingToken ? '留空保持现有 token 不变' : 'Set a strong random token'}
+                placeholder={hasExistingToken ? 'Leave blank to keep existing token' : 'Set a strong random token'}
                 {...register('token', {
-                  // 已有 token 时允许为空（不修改）；无 token 时必填
+                  // When a token already exists, the field is optional (do not modify); when no token, it is required
                   required: hasExistingToken ? false : 'Required',
                 })}
               />

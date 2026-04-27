@@ -230,7 +230,8 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
             onChange={(e) => {
               const next = e.target.value
               if (isDirty && next !== activeSource) {
-                if (!window.confirm('当前映射草稿未保存，切换 Source 后草稿仍会保留（各 Source 独立保存），但预览结果将重置。\n\n确认切换 Source 吗？')) return
+
+                if (!window.confirm('Unsaved mapping draft — each source keeps its own draft, but preview results will reset.\n\nSwitch source anyway?')) return
               }
               setSelected(next)
               switchSource(next)
@@ -245,11 +246,11 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
         {activeSource && (
           isDirty ? (
             <span className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-700">
-              <AlertTriangle className="w-3 h-3" /> 草稿未保存
+              <AlertTriangle className="w-3 h-3" /> Unsaved Draft
             </span>
           ) : Object.keys(mapping).length > 0 ? (
             <span className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700">
-              ✓ 已保存
+              ✓ Saved
             </span>
           ) : null
         )}

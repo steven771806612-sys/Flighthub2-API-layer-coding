@@ -22,8 +22,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+// Default browser confirm message for unsaved changes
 const DEFAULT_MSG =
-  '您有未保存的更改，离开后将丢失。确认要离开吗？'
+  'You have unsaved changes. Leaving this page will discard them. Are you sure?'
 
 interface UseDirtyGuardReturn {
   isDirty: boolean

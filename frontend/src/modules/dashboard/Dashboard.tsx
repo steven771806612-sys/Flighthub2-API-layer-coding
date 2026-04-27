@@ -79,7 +79,7 @@ function ApiPreviewPanel({ sourceId }: { sourceId: string }) {
       {/* Toolbar */}
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs font-semibold text-gray-500 flex items-center gap-1">
-          <Eye className="w-3.5 h-3.5" /> 实时 API 输出预览
+          <Eye className="w-3.5 h-3.5" /> Live API Output Preview
         </span>
 
         <button
@@ -91,7 +91,7 @@ function ApiPreviewPanel({ sourceId }: { sourceId: string }) {
               : 'border-gray-300 text-gray-500 hover:border-gray-400'
           }`}
         >
-          {editing ? '收起 Payload' : '编辑 Payload'}
+          {editing ? 'Collapse Payload' : 'Edit Payload'}
         </button>
 
         <Button
@@ -104,7 +104,7 @@ function ApiPreviewPanel({ sourceId }: { sourceId: string }) {
           {isPending
             ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
             : <Play className="w-3.5 h-3.5" />}
-          {result ? '重新运行' : '运行预览'}
+          {result ? 'Re-run' : 'Run Preview'}
         </Button>
       </div>
 
@@ -116,12 +116,12 @@ function ApiPreviewPanel({ sourceId }: { sourceId: string }) {
           onChange={(e) => setPayload(e.target.value)}
           rows={6}
           className="w-full text-xs font-mono bg-gray-950 text-gray-200 border border-gray-700 rounded-lg p-3 resize-y focus:outline-none focus:ring-1 focus:ring-brand-400"
-          placeholder="输入 JSON payload…"
+          placeholder="Enter JSON payload…"
           spellCheck={false}
         />
       )}
 
-      {/* Results: 两列并排 */}
+      {/* Results: two-column layout */}
       {result && (
         <div className="grid grid-cols-[1fr_auto] gap-3 items-start">
           {/* FH2 body */}
@@ -129,15 +129,15 @@ function ApiPreviewPanel({ sourceId }: { sourceId: string }) {
             <div className="flex items-center justify-between px-3 py-2 bg-gray-900">
               <div className="flex items-center gap-2">
                 <Layers className="w-3.5 h-3.5 text-brand-400" />
-                <span className="text-xs font-semibold text-gray-200">FH2 API 报文</span>
+                <span className="text-xs font-semibold text-gray-200">FH2 API Body</span>
                 {missing.length === 0 && finalBody && (
                   <span className="text-xs bg-emerald-900/60 text-emerald-400 border border-emerald-700/40 rounded-full px-2 py-0.5">
-                    ✓ 字段完整
+                    ✓ All fields present
                   </span>
                 )}
                 {missing.length > 0 && (
                   <span className="text-xs bg-amber-900/60 text-amber-400 border border-amber-700/40 rounded-full px-2 py-0.5">
-                    ⚠ {missing.length} 缺失
+                    ⚠ {missing.length} missing
                   </span>
                 )}
               </div>
@@ -166,7 +166,7 @@ function ApiPreviewPanel({ sourceId }: { sourceId: string }) {
                 />
               )}
               {!bodyJson && result.status === 'ok' && (
-                <p className="text-xs text-gray-500 p-3 font-mono">暂无输出（检查映射配置）</p>
+                <p className="text-xs text-gray-500 p-3 font-mono">No output — check mapping configuration</p>
               )}
             </div>
 
@@ -203,7 +203,7 @@ function ApiPreviewPanel({ sourceId }: { sourceId: string }) {
       {!result && !isPending && (
         <div className="flex items-center justify-center h-12 text-gray-400 gap-2 border border-dashed border-gray-200 rounded-lg">
           <Play className="w-4 h-4 opacity-40" />
-          <span className="text-xs">点击「运行预览」查看最终 FH2 报文</span>
+          <span className="text-xs">Click "Run Preview" to see the final FH2 request body</span>
         </div>
       )}
     </div>
@@ -280,10 +280,10 @@ function PipelineCard({
               ? 'border-brand-400 bg-brand-50 text-brand-600'
               : 'border-gray-200 bg-gray-50 text-gray-500 hover:border-gray-300 hover:text-gray-700'
           }`}
-          title="实时 API 输出预览"
+          title="Live API Output Preview"
         >
           <Eye className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">API 预览</span>
+          <span className="hidden sm:inline">API Preview</span>
           {previewOpen
             ? <ChevronUp   className="w-3 h-3" />
             : <ChevronDown className="w-3 h-3" />}
@@ -335,8 +335,10 @@ export function Dashboard() {
           const egsCfg  = egress.status  === 'fulfilled' ? egress.value  : null
 
           const authStatus: StepStatus =
-            authCfg?.enabled && authCfg?.token ? 'ok' :
-            authCfg ? 'warn' : 'missing'
+            !authCfg ? 'missing' :
+            !authCfg.enabled ? 'ok' :               // disabled = intentionally open, treat as ok
+            authCfg.enabled && authCfg?.token ? 'ok' :
+            'warn'
 
           const mapStatus: StepStatus =
             (mapCfg?.mappings?.length ?? 0) > 0 ? 'ok' : 'missing'
@@ -403,7 +405,7 @@ export function Dashboard() {
           {pipelines.length > 0 && (
             <span className="text-xs text-gray-400 flex items-center gap-1">
               <Eye className="w-3.5 h-3.5" />
-              点击「API 预览」可实时查看最终输出报文
+              Click "API Preview" to see the live final output body
             </span>
           )}
         </div>

@@ -155,32 +155,32 @@ export function DevicePicker({ sourceId, onDeviceIdFieldChange }: DevicePickerPr
       {open && (
         <div className="p-4 space-y-5">
 
-          {/* ── 工作原理说明 ─────────────────────────────────────────────── */}
+          {/* ── How it works ────────────────────────────────────────────────── */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 text-xs text-blue-800">
-            <p className="font-semibold mb-1.5">工作原理：三步注入 GPS</p>
+            <p className="font-semibold mb-1.5">How it works: 3-step GPS injection</p>
             <ol className="space-y-1.5 list-none">
               <li className="flex items-start gap-2">
                 <span className="shrink-0 w-4 h-4 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-[10px]">1</span>
                 <span>
-                  <strong>Device ID Field</strong>（下方配置）— 填写 payload 中用于标识设备的字段名。
-                  Worker 运行时会读取该字段的<strong>值</strong>（如字段名填 <code className="bg-blue-100 px-1 rounded font-mono">ipAddress</code>，
-                  则读取 <code className="bg-blue-100 px-1 rounded font-mono">payload.ipAddress</code> 的实际内容，例如 <code className="bg-blue-100 px-1 rounded font-mono">192.168.1.1</code>）。
+                  <strong>Device ID Field</strong> (configured below) — enter the flattened payload field that identifies the device.
+                  At runtime the worker reads the <strong>value</strong> of that field (e.g. if you set <code className="bg-blue-100 px-1 rounded font-mono">ipAddress</code>,
+                  it reads <code className="bg-blue-100 px-1 rounded font-mono">payload.ipAddress</code>, e.g. <code className="bg-blue-100 px-1 rounded font-mono">192.168.1.1</code>).
                 </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="shrink-0 w-4 h-4 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-[10px]">2</span>
                 <span>
-                  <strong>Device Registry</strong>（下方表格）— 以字段的实际值为 key，配置对应的固定经纬度。
-                  <strong>「字段值」列填写的是 payload 中该字段的真实内容</strong>（如 <code className="bg-blue-100 px-1 rounded font-mono">192.168.1.1</code>），
-                  Worker 用它查表，匹配后取出 lat / lng。
+                  <strong>Device Registry</strong> (table below) — map each real field value to fixed coordinates.
+                  The <strong>"Field Value" column holds the actual content of that field in the payload</strong> (e.g. <code className="bg-blue-100 px-1 rounded font-mono">192.168.1.1</code>).
+                  The worker looks it up and retrieves lat / lng.
                 </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="shrink-0 w-4 h-4 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold text-[10px]">3</span>
                 <span>
-                  <strong>自动注入</strong> — 匹配成功后，将对应 lat / lng 写入
+                  <strong>Auto-inject</strong> — on match, the resolved lat / lng are written to
                   <code className="bg-blue-100 px-1 rounded font-mono ml-1">params.latitude</code> /
-                  <code className="bg-blue-100 px-1 rounded font-mono ml-1">params.longitude</code>（仅当这两个字段尚未通过字段映射填充时）。
+                  <code className="bg-blue-100 px-1 rounded font-mono ml-1">params.longitude</code> (only when those fields are not already filled by field mapping).
                 </span>
               </li>
             </ol>
@@ -190,12 +190,12 @@ export function DevicePicker({ sourceId, onDeviceIdFieldChange }: DevicePickerPr
           <div>
             <div className="flex items-center gap-1.5 mb-1.5">
               <Fingerprint className="w-3.5 h-3.5 text-indigo-500" />
-              <span className="text-xs font-semibold text-gray-700">步骤 1：Device ID Field</span>
-              <span className="text-xs text-gray-400">— payload 中哪个字段是设备标识符</span>
+              <span className="text-xs font-semibold text-gray-700">Step 1: Device ID Field</span>
+              <span className="text-xs text-gray-400">— which payload field identifies the device</span>
             </div>
             <p className="text-xs text-gray-400 mb-2">
-              填写 flattened payload 中的字段名。留空则默认使用
-              <code className="font-mono bg-gray-100 px-1 mx-0.5 rounded">device_id</code>。
+              Enter the field name from the flattened payload. Leave blank to default to
+              <code className="font-mono bg-gray-100 px-1 mx-0.5 rounded">device_id</code>.
             </p>
             <div className="flex items-center gap-2">
               <input
@@ -225,7 +225,7 @@ export function DevicePicker({ sourceId, onDeviceIdFieldChange }: DevicePickerPr
             </div>
             {deviceIdField && (
               <p className="text-xs text-indigo-600 mt-1.5">
-                ✓ Worker 读取 payload 字段 <code className="font-mono bg-indigo-50 px-1 rounded">{deviceIdField}</code> 的<strong>值</strong>，在下方表格中查找匹配的经纬度
+                ✓ Worker reads the <strong>value</strong> of payload field <code className="font-mono bg-indigo-50 px-1 rounded">{deviceIdField}</code> and looks up matching coordinates in the table below
               </p>
             )}
           </div>
@@ -238,8 +238,8 @@ export function DevicePicker({ sourceId, onDeviceIdFieldChange }: DevicePickerPr
             <div className="flex items-center justify-between mb-1.5">
               <div className="flex items-center gap-1.5">
                 <MapPin className="w-3.5 h-3.5 text-teal-500" />
-                <span className="text-xs font-semibold text-gray-700">步骤 2：Device Registry</span>
-                <span className="text-xs text-gray-400">— 设备 ID 值 → 固定经纬度</span>
+                <span className="text-xs font-semibold text-gray-700">Step 2: Device Registry</span>
+                <span className="text-xs text-gray-400">— Device ID value → fixed coordinates</span>
               </div>
               {/* Link to Devices page */}
               <a
@@ -250,21 +250,21 @@ export function DevicePicker({ sourceId, onDeviceIdFieldChange }: DevicePickerPr
                 onClick={(e) => e.stopPropagation()}
               >
                 <ExternalLink className="w-3 h-3" />
-                Devices 页面
+                Devices Page
               </a>
             </div>
             <p className="text-xs text-gray-400 mb-3">
-              数据与 Devices 页面共享。此处可快速添加设备，完整管理请前往 Devices 页面。
+              Data is shared with the Devices page. You can quickly add devices here; for full management go to the Devices page.
             </p>
 
             {/* Table */}
             {devices.length > 0 && (
               <div className="space-y-1 mb-3">
-                {/* Header — 强调「字段值」是 payload 中该字段的实际内容 */}
+                {/* Header — emphasise that the "Field Value" column holds the actual payload value */}
                 <div className="grid grid-cols-[1.4fr_1fr_0.9fr_0.9fr_auto] gap-2 px-2 text-xs font-medium text-gray-400">
                   {[
-                    deviceIdField ? `${deviceIdField} 的值` : '字段值（Device ID）',
-                    '备注',
+                    deviceIdField ? `${deviceIdField} value` : 'Field Value (Device ID)',
+                    'Note',
                     'Lat',
                     'Lng',
                     '',
@@ -306,19 +306,19 @@ export function DevicePicker({ sourceId, onDeviceIdFieldChange }: DevicePickerPr
                   <div>
                     <label className="text-xs text-gray-500 mb-0.5 block">
                       {deviceIdField
-                        ? <><code className="font-mono bg-gray-100 px-1 rounded">{deviceIdField}</code> 的值 <span className="text-red-400">*</span></>
-                        : <>字段值（Device ID）<span className="text-red-400">*</span></>}
+                        ? <><code className="font-mono bg-gray-100 px-1 rounded">{deviceIdField}</code> value <span className="text-red-400">*</span></>
+                        : <>Field Value (Device ID)<span className="text-red-400">*</span></>}
                     </label>
                     <input
                       className="w-full text-xs font-mono border border-gray-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                      placeholder={deviceIdField ? `payload.${deviceIdField} 的实际内容` : 'e.g. 192.168.1.1'}
+                      placeholder={deviceIdField ? `actual value of payload.${deviceIdField}` : 'e.g. 192.168.1.1'}
                       value={newDraft.device_id}
                       onChange={(e) => patchNew('device_id', e.target.value)}
                       autoFocus
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-gray-500 mb-0.5 block">备注（可选）</label>
+                    <label className="text-xs text-gray-500 mb-0.5 block">Note (optional)</label>
                     <input
                       className="w-full text-xs border border-gray-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                       placeholder="M300 RTK"
@@ -383,12 +383,12 @@ export function DevicePicker({ sourceId, onDeviceIdFieldChange }: DevicePickerPr
           {/* Hints */}
           {!hasDeviceGps && !deviceIdField && (
             <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              ⚠ 尚未配置 GPS 注入。请先填写步骤 1 的 Device ID Field，再在步骤 2 注册设备坐标。
+              ⚠ GPS injection not configured. Fill in the Device ID Field in Step 1 first, then register device coordinates in Step 2.
             </p>
           )}
           {hasDeviceGps && !deviceIdField && (
             <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              ℹ 已注册设备 GPS，但未配置 Device ID Field，Worker 无法自动匹配，请在步骤 1 填写字段名。
+              ℹ Device GPS registered, but Device ID Field is not set — the worker cannot match automatically. Please fill in the field name in Step 1.
             </p>
           )}
         </div>
