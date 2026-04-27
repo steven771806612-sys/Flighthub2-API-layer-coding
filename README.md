@@ -2,7 +2,7 @@
 
 > A universal webhook middleware for DJI FlightHub2 — receives third-party alarm webhooks, processes them through a standardised pipeline, and forwards the result to the FlightHub2 Workflow API.
 
-**Version:** v6.9 · **Last updated:** 2026-04-03  
+**Version:** v6.9 · **Last updated:** 2026-04-26 (POC updated)  
 **GitHub:** https://github.com/steven771806612-sys/Flighthub2-API-layer-coding
 
 ---
@@ -232,6 +232,11 @@ webapp/
 │       ├── store/           Zustand stores (source, mapping, wizard, UI)
 │       ├── services/        API service layer (18 endpoints)
 │       └── types/           TypeScript type definitions
+├── universal-webhook-poc/   Lightweight Redis-only sandbox POC
+│   ├── app/                 FastAPI app (mapping / template / auth)
+│   ├── worker/              Async Redis Stream consumer
+│   ├── scripts/             Start scripts + E2E test
+│   └── README.md            POC-specific documentation
 ├── deploy/
 │   ├── supervisord.conf     Process supervisor config
 │   └── entrypoint.sh        Docker start script
@@ -337,10 +342,38 @@ curl -X POST http://localhost:8000/webhook \
 
 ---
 
+## Sub-Projects
+
+### `universal-webhook-poc/` — Sandbox POC
+
+> Initial release: 2026-03-18 · Last updated: 2026-04-26
+
+A self-contained proof-of-concept that runs the full observable pipeline without any build tooling or Kafka infrastructure. Designed for rapid sandbox testing, onboarding, and live debugging of FlightHub2 integrations.
+
+| Aspect | Details |
+|--------|---------|
+| **Queue** | Redis Streams only (no Kafka dependency) |
+| **API** | FastAPI · `/webhook` + 14 `/admin/*` endpoints |
+| **UI** | 5-tab static HTML console at `/ui/` (no npm build) |
+| **Worker** | Async `XREADGROUP` consumer (×2 parallel) — mapping → template → HTTP → persist result |
+| **Auth** | Per-source inbound static token; `enabled=false` fully disables auth (no token required) |
+| **Result tracking** | Every FH2 push stored in Redis (`uw:lastpush` / `uw:pushlog`); queryable by `test_id` |
+| **Business check** | HTTP 2xx + `business_code` ∈ (0, 200, null) → success; HTTP 200 + code=200401 → failure |
+| **Dashboard** | Stat cards, consumer group detail, push history, auto-refresh (2 s / 5 s / 10 s) |
+| **Integration test** | Pipeline Preview (dry-run) + Send & Test with auto-poll and full result panel |
+| **Logs** | Tail `api.log` / `worker-1.log` / `worker-2.log` via UI or API |
+| **Start** | `bash universal-webhook-poc/scripts/sandbox_test.sh` |
+
+See [`universal-webhook-poc/README.md`](universal-webhook-poc/README.md) for full setup instructions, API reference, and changelog.
+
+---
+
 ## Changelog
 
 | Version | Key changes |
 |---------|-------------|
+| **POC v2** | `universal-webhook-poc/` — FH2 response persistence (`uw:lastpush` / `uw:pushlog`); business_code success/fail judgment; `enabled=false` auth bug fixed; 5 new dashboard/preview/result/logs endpoints; `/webhook` returns `test_id`; UI rewritten to 5-tab console with Dashboard stat cards, Integration Test auto-poll, auth-linked token input, log viewer |
+| **POC v1** | Added `universal-webhook-poc/` — Redis-Streams-only sandbox spike; static HTML UI; inbound auth gate; full E2E test script |
 | **v6.9** | Source context persistence (localStorage); per-source mapping draft isolation; `useDirtyGuard` hook for all form pages; MappingPage & Sidebar dirty-switch confirmation; no-source guard on Mapping/Egress pages |
 | **v6.8** | Real-time mapping preview: unsaved visual mappings passed to `debug/run` as `mapping_override` |
 | **v6.7** | Autofill fixes: empty-string passthrough, dot-path aliases (`params.latitude`), level string → integer conversion |
