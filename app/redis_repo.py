@@ -164,3 +164,46 @@ class RedisRepo:
         key = self._LOG_KEY_GLOBAL if not source else self._k_logs(source)
         return await self.redis.delete(key)
 
+    # ── Ingest Access Logs ────────────────────────────────────────────────────
+    # Records every HTTP request that hits POST /webhook — both accepted and
+    # rejected — so users can see what the third-party system sent and why
+    # it was rejected (auth failure, missing source, bad payload, etc.).
+    #
+    # Redis key: uw:ingest:_all_   (global, newest-first, capped at 500)
+    # Each entry dict keys:
+    #   ts, source, ip, method, path, status_code, result,
+    #   reject_reason, request_headers, body_size
+
+    _MAX_INGEST_LOGS = 500
+    _INGEST_KEY_GLOBAL = "uw:ingest:_all_"
+
+    async def append_ingest_log(self, entry: dict) -> None:
+        """Prepend an ingest log entry (newest-first) to the global ingest list."""
+        import json as _json
+        serialized = _json.dumps(entry, ensure_ascii=False)
+        pipe = self.redis.pipeline()
+        pipe.lpush(self._INGEST_KEY_GLOBAL, serialized)
+        pipe.ltrim(self._INGEST_KEY_GLOBAL, 0, self._MAX_INGEST_LOGS - 1)
+        await pipe.execute()
+
+    async def get_ingest_logs(self, source: str | None, limit: int = 100) -> list[dict]:
+        """Return the most recent *limit* ingest log entries, optionally filtered by source."""
+        import json as _json
+        raws = await self.redis.lrange(self._INGEST_KEY_GLOBAL, 0, self._MAX_INGEST_LOGS - 1)
+        out = []
+        for r in raws:
+            try:
+                entry = _json.loads(r)
+                if source and entry.get("source") != source:
+                    continue
+                out.append(entry)
+                if len(out) >= limit:
+                    break
+            except Exception:
+                pass
+        return out
+
+    async def clear_ingest_logs(self) -> int:
+        """Delete all ingest logs."""
+        return await self.redis.delete(self._INGEST_KEY_GLOBAL)
+

@@ -227,3 +227,34 @@ export const diagnosticService = {
     return data as DiagnosticResult
   },
 }
+
+// ─── Ingest Access Logs ───────────────────────────────────────────────────────
+// Records every HTTP request that arrives at POST /webhook,
+// including rejected ones (auth failures, missing source, bad payload).
+
+export interface IngestLog {
+  ts: number
+  source: string
+  ip: string
+  method: string
+  path: string
+  status_code: number
+  result: 'accepted' | 'rejected' | 'error'
+  reject_reason: string
+  request_headers: Record<string, string>
+  body_size: number
+}
+
+export const ingestLogService = {
+  async get(sourceId?: string, limit = 100): Promise<IngestLog[]> {
+    const { data } = await apiClient.post('/admin/ingest-logs/get', {
+      ...(sourceId ? { source: sourceId } : {}),
+      limit,
+    })
+    return (data.logs ?? []) as IngestLog[]
+  },
+
+  async clear(): Promise<void> {
+    await apiClient.post('/admin/ingest-logs/clear', {})
+  },
+}

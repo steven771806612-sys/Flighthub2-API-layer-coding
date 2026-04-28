@@ -1,26 +1,24 @@
 /**
- * LogsPage.tsx — Processing Logs Viewer
+ * LogsPage.tsx — Dual-tab log viewer
  *
- * Shows per-source (or global) worker processing logs including:
- *  - Timestamp, source, message ID
- *  - HTTP status returned by FlightHub2
- *  - Full FH2 response body (collapsible)
- *  - Missing fields warnings
- *  - Success / failure indicator
+ * Tab 1 – Ingest Logs  : every HTTP POST that arrived at /webhook
+ *                         (accepted OR rejected), with rejection reason
+ * Tab 2 – Processing Logs : worker→FlightHub2 push results
  */
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { logService } from '@/services'
+import { logService, ingestLogService } from '@/services'
 import { useSourceStore, useUIStore } from '@/store'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import {
   RefreshCw, Trash2, CheckCircle, XCircle, AlertTriangle,
   ChevronDown, ChevronRight, Clock, Activity, Filter,
+  ArrowDownToLine, Zap,
 } from 'lucide-react'
-import type { ProcessingLog } from '@/services'
+import type { ProcessingLog, IngestLog } from '@/services'
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Shared helpers ───────────────────────────────────────────────────────────
 function fmtTs(ts: number): string {
   const d = new Date(ts * 1000)
   return d.toLocaleString('en-US', {
@@ -38,24 +36,33 @@ function httpBadge(status: number) {
   return <span className="px-1.5 py-0.5 text-xs font-mono rounded-full bg-red-100 text-red-700 border border-red-200">{status}</span>
 }
 
-// ─── Single log row ───────────────────────────────────────────────────────────
-function LogRow({ log }: { log: ProcessingLog }) {
+// ─── Tab 1: Ingest Log row ────────────────────────────────────────────────────
+function IngestRow({ log }: { log: IngestLog }) {
   const [open, setOpen] = useState(false)
-  const hasMissing = log.missing_fields?.length > 0
-  const hasResponse = !!log.fh2_response
+
+  const isAccepted = log.result === 'accepted'
+  const isRejected = log.result === 'rejected'
+  const hasHeaders = log.request_headers && Object.keys(log.request_headers).length > 0
+  const hasReason  = !!log.reject_reason
+
+  const resultBadge = isAccepted
+    ? <span className="px-1.5 py-0.5 text-xs font-medium rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200 shrink-0">accepted</span>
+    : isRejected
+      ? <span className="px-1.5 py-0.5 text-xs font-medium rounded-full bg-red-100 text-red-700 border border-red-200 shrink-0">rejected</span>
+      : <span className="px-1.5 py-0.5 text-xs font-medium rounded-full bg-amber-100 text-amber-700 border border-amber-200 shrink-0">error</span>
 
   return (
-    <div className={`border rounded-lg overflow-hidden ${log.ok ? 'border-gray-200' : 'border-red-200'}`}>
+    <div className={`border rounded-lg overflow-hidden ${isAccepted ? 'border-gray-200' : 'border-red-200'}`}>
       {/* Summary row */}
       <button
         type="button"
         onClick={() => setOpen(!open)}
         className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-gray-50 ${
-          log.ok ? 'bg-white' : 'bg-red-50'
+          isAccepted ? 'bg-white' : 'bg-red-50'
         }`}
       >
-        {/* OK/fail icon */}
-        {log.ok
+        {/* Icon */}
+        {isAccepted
           ? <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
           : <XCircle     className="w-4 h-4 text-red-500 shrink-0" />}
 
@@ -67,27 +74,32 @@ function LogRow({ log }: { log: ProcessingLog }) {
 
         {/* Source */}
         <span className="text-xs font-mono bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded shrink-0">
-          {log.source}
+          {log.source || '—'}
         </span>
 
-        {/* Event name (body_name) */}
-        <span className="flex-1 text-xs text-gray-700 truncate font-medium">
-          {log.body_name || <span className="text-gray-400 italic">unnamed</span>}
-        </span>
+        {/* IP */}
+        <span className="text-xs text-gray-400 font-mono shrink-0">{log.ip || '—'}</span>
 
-        {/* HTTP badge */}
-        {httpBadge(log.http_status)}
+        {/* Result badge */}
+        {resultBadge}
 
-        {/* Missing fields warning */}
-        {hasMissing && (
-          <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full shrink-0">
-            <AlertTriangle className="w-3 h-3" />
-            {log.missing_fields.length} missing
+        {/* HTTP status */}
+        {httpBadge(log.status_code)}
+
+        {/* Rejection reason (short) */}
+        {isRejected && hasReason && (
+          <span className="flex-1 text-xs text-red-600 truncate">
+            {log.reject_reason}
+          </span>
+        )}
+        {isAccepted && (
+          <span className="flex-1 text-xs text-gray-400 truncate">
+            body {log.body_size} bytes
           </span>
         )}
 
         {/* Expand arrow */}
-        {(hasResponse || hasMissing) && (
+        {(hasHeaders || hasReason) && (
           open
             ? <ChevronDown  className="w-3.5 h-3.5 text-gray-400 shrink-0" />
             : <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />
@@ -97,7 +109,103 @@ function LogRow({ log }: { log: ProcessingLog }) {
       {/* Detail panel */}
       {open && (
         <div className="border-t border-gray-100 bg-gray-50 px-3 py-2 space-y-2">
-          {/* msg_id + workflow_uuid */}
+
+          {/* Rejection reason (full) */}
+          {hasReason && (
+            <div className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              <XCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <div>
+                <strong>Rejection Reason: </strong>
+                <span className="ml-1 break-all">{log.reject_reason}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Request headers */}
+          {hasHeaders && (
+            <div>
+              <p className="text-xs text-gray-500 mb-1 font-semibold">Request Headers:</p>
+              <div className="font-mono text-xs bg-gray-900 text-gray-200 rounded-lg px-3 py-2 space-y-0.5 overflow-x-auto">
+                {Object.entries(log.request_headers).map(([k, v]) => (
+                  <div key={k}>
+                    <span className="text-blue-300">{k}</span>
+                    <span className="text-gray-400">: </span>
+                    <span className={v === '***' ? 'text-amber-400' : 'text-gray-200'}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              {Object.values(log.request_headers).some(v => v === '***') && (
+                <p className="text-xs text-amber-600 mt-1">
+                  <AlertTriangle className="w-3 h-3 inline mr-1" />
+                  Headers marked <code className="bg-amber-100 px-1 rounded">***</code> were present but their values are masked for security.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Meta info */}
+          <div className="flex flex-wrap gap-4 text-xs text-gray-400 font-mono">
+            <span>method: <span className="text-gray-600">POST</span></span>
+            <span>path: <span className="text-gray-600">{log.path}</span></span>
+            <span>body_size: <span className="text-gray-600">{log.body_size} bytes</span></span>
+            <span>ip: <span className="text-gray-600">{log.ip}</span></span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Tab 2: Processing Log row ────────────────────────────────────────────────
+function ProcessingRow({ log }: { log: ProcessingLog }) {
+  const [open, setOpen] = useState(false)
+  const hasMissing  = log.missing_fields?.length > 0
+  const hasResponse = !!log.fh2_response
+
+  return (
+    <div className={`border rounded-lg overflow-hidden ${log.ok ? 'border-gray-200' : 'border-red-200'}`}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-gray-50 ${
+          log.ok ? 'bg-white' : 'bg-red-50'
+        }`}
+      >
+        {log.ok
+          ? <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />
+          : <XCircle     className="w-4 h-4 text-red-500 shrink-0" />}
+
+        <span className="text-xs text-gray-400 font-mono shrink-0 flex items-center gap-1">
+          <Clock className="w-3 h-3" />
+          {fmtTs(log.ts)}
+        </span>
+
+        <span className="text-xs font-mono bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded shrink-0">
+          {log.source}
+        </span>
+
+        <span className="flex-1 text-xs text-gray-700 truncate font-medium">
+          {log.body_name || <span className="text-gray-400 italic">unnamed</span>}
+        </span>
+
+        {httpBadge(log.http_status)}
+
+        {hasMissing && (
+          <span className="flex items-center gap-1 text-xs text-amber-600 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full shrink-0">
+            <AlertTriangle className="w-3 h-3" />
+            {log.missing_fields.length} missing
+          </span>
+        )}
+
+        {(hasResponse || hasMissing) && (
+          open
+            ? <ChevronDown  className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+            : <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />
+        )}
+      </button>
+
+      {open && (
+        <div className="border-t border-gray-100 bg-gray-50 px-3 py-2 space-y-2">
           <div className="flex flex-wrap gap-4 text-xs text-gray-400 font-mono">
             <span>msg_id: <span className="text-gray-600">{log.msg_id}</span></span>
             {log.workflow_uuid && (
@@ -105,22 +213,18 @@ function LogRow({ log }: { log: ProcessingLog }) {
             )}
           </div>
 
-          {/* Missing fields */}
           {hasMissing && (
             <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <div>
-                {/* <strong>Missing required fields:</strong> */}
-              <strong>Missing required fields:</strong>
+                <strong>Missing required fields: </strong>
                 <span className="ml-1">{log.missing_fields.join(', ')}</span>
               </div>
             </div>
           )}
 
-          {/* FH2 response body */}
           {hasResponse && (
             <div>
-              
               <p className="text-xs text-gray-500 mb-1 font-semibold">FlightHub2 Response:</p>
               <pre className="text-xs font-mono bg-gray-900 text-gray-200 rounded-lg px-3 py-2 overflow-x-auto max-h-48 whitespace-pre-wrap break-all">
                 {log.fh2_response}
@@ -134,114 +238,212 @@ function LogRow({ log }: { log: ProcessingLog }) {
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
+type TabId = 'ingest' | 'processing'
+
 export default function LogsPage() {
   const { sources } = useSourceStore()
   const { addToast } = useUIStore()
   const qc = useQueryClient()
 
-  // Filter: null = global (all sources), or a specific source id
+  const [activeTab, setActiveTab]     = useState<TabId>('ingest')
   const [filterSource, setFilterSource] = useState<string | null>(null)
-  const [limit, setLimit] = useState(100)
+  const [limit, setLimit]             = useState(100)
 
-  const queryKey = ['logs', filterSource, limit]
-
-  const { data: logs = [], isLoading, isFetching } = useQuery({
-    queryKey,
-    queryFn: () => logService.get(filterSource ?? undefined, limit),
+  // ── Ingest logs query ──────────────────────────────────────────────────────
+  const ingestKey = ['ingest-logs', filterSource, limit]
+  const {
+    data: ingestLogs = [],
+    isLoading: ingestLoading,
+    isFetching: ingestFetching,
+  } = useQuery({
+    queryKey: ingestKey,
+    queryFn: () => ingestLogService.get(filterSource ?? undefined, limit),
     staleTime: 0,
-    refetchInterval: 10_000,   // auto-refresh every 10s
+    refetchInterval: 10_000,
   })
 
-  const { mutate: clearLogs, isPending: clearing } = useMutation({
-    mutationFn: () => logService.clear(filterSource ?? undefined),
+  const { mutate: clearIngest, isPending: clearingIngest } = useMutation({
+    mutationFn: () => ingestLogService.clear(),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['logs'] })
-      addToast('success', 'Logs cleared')
+      qc.invalidateQueries({ queryKey: ['ingest-logs'] })
+      addToast('success', 'Ingest logs cleared')
     },
     onError: (e: Error) => addToast('error', e.message),
   })
 
-  const successCount = logs.filter(l => l.ok).length
-  const failCount    = logs.filter(l => !l.ok).length
+  // ── Processing logs query ──────────────────────────────────────────────────
+  const procKey = ['logs', filterSource, limit]
+  const {
+    data: procLogs = [],
+    isLoading: procLoading,
+    isFetching: procFetching,
+  } = useQuery({
+    queryKey: procKey,
+    queryFn: () => logService.get(filterSource ?? undefined, limit),
+    staleTime: 0,
+    refetchInterval: 10_000,
+  })
 
+  const { mutate: clearProc, isPending: clearingProc } = useMutation({
+    mutationFn: () => logService.clear(filterSource ?? undefined),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['logs'] })
+      addToast('success', 'Processing logs cleared')
+    },
+    onError: (e: Error) => addToast('error', e.message),
+  })
+
+  // ── Derived stats ──────────────────────────────────────────────────────────
+  const ingestAccepted = ingestLogs.filter(l => l.result === 'accepted').length
+  const ingestRejected = ingestLogs.filter(l => l.result === 'rejected').length
+  const procSuccess    = procLogs.filter(l => l.ok).length
+  const procFail       = procLogs.filter(l => !l.ok).length
+
+  const isIngest      = activeTab === 'ingest'
+  const isFetching    = isIngest ? ingestFetching : procFetching
+  const isLoading     = isIngest ? ingestLoading  : procLoading
+  const isClearing    = isIngest ? clearingIngest  : clearingProc
+
+  function handleRefresh() {
+    qc.invalidateQueries({ queryKey: isIngest ? ['ingest-logs'] : ['logs'] })
+  }
+
+  function handleClear() {
+    const label = filterSource ? `"${filterSource}"` : 'all'
+    if (!window.confirm(`Confirm clearing ${label} ${isIngest ? 'ingest' : 'processing'} logs?`)) return
+    isIngest ? clearIngest() : clearProc()
+  }
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      {/* Header */}
+
+      {/* ── Page header ── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Processing Logs</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Logs</h1>
           <p className="text-sm text-gray-500 mt-1">
-            Worker Processing Logs &amp; FlightHub2 API Responses
-          
+            Inbound webhook requests &amp; outbound FlightHub2 push results
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            loading={isFetching}
-            onClick={() => qc.invalidateQueries({ queryKey: ['logs'] })}
-          >
+          <Button variant="secondary" size="sm" loading={isFetching} onClick={handleRefresh}>
             <RefreshCw className="w-4 h-4" />
             Refresh
           </Button>
           <Button
-            variant="ghost"
-            size="sm"
-            loading={clearing}
-            onClick={() => {
-              
-          if (window.confirm(`Confirm clearing ${filterSource ? `"${filterSource}"` : 'all'} logs?`)) {
-                clearLogs()
-              }
-            }}
+            variant="ghost" size="sm" loading={isClearing} onClick={handleClear}
             className="text-red-500 hover:text-red-700 hover:bg-red-50"
           >
             <Trash2 className="w-4 h-4" />
-            Clear Logs
+            Clear
           </Button>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
-        <Card>
-          <div className="flex items-center gap-3">
-            <Activity className="w-5 h-5 text-brand-500" />
-            <div>
-              <p className="text-2xl font-bold text-gray-900">{logs.length}</p>
-              {/* Recent Log Entries */}
-              <p className="text-xs text-gray-500">Recent Log Count</p>
-            </div>
-          </div>
-        </Card>
-        <Card>
-          <div className="flex items-center gap-3">
-            <CheckCircle className="w-5 h-5 text-emerald-500" />
-            <div>
-              <p className="text-2xl font-bold text-gray-900">{successCount}</p>
-              {/* Pushed Successfully */}
-              <p className="text-xs text-gray-500">Push Successful</p>
-            </div>
-          </div>
-        </Card>
-        <Card>
-          <div className="flex items-center gap-3">
-            <XCircle className="w-5 h-5 text-red-500" />
-            <div>
-              <p className="text-2xl font-bold text-gray-900">{failCount}</p>
-              {/* Push Failed */}
-              <p className="text-xs text-gray-500">Push Failed</p>
-            </div>
-          </div>
-        </Card>
+      {/* ── Tabs ── */}
+      <div className="flex gap-0 border border-gray-200 rounded-xl overflow-hidden w-fit">
+        <button
+          onClick={() => setActiveTab('ingest')}
+          className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium transition-colors ${
+            isIngest
+              ? 'bg-brand-600 text-white'
+              : 'bg-white text-gray-600 hover:bg-gray-50'
+          }`}
+        >
+          <ArrowDownToLine className="w-4 h-4" />
+          Ingest Logs
+          <span className={`text-xs px-1.5 py-0.5 rounded-full font-mono ${
+            isIngest ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'
+          }`}>
+            {ingestLogs.length}
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveTab('processing')}
+          className={`flex items-center gap-2 px-5 py-2.5 text-sm font-medium transition-colors border-l border-gray-200 ${
+            !isIngest
+              ? 'bg-brand-600 text-white'
+              : 'bg-white text-gray-600 hover:bg-gray-50'
+          }`}
+        >
+          <Zap className="w-4 h-4" />
+          Processing Logs
+          <span className={`text-xs px-1.5 py-0.5 rounded-full font-mono ${
+            !isIngest ? 'bg-white/20 text-white' : 'bg-gray-100 text-gray-500'
+          }`}>
+            {procLogs.length}
+          </span>
+        </button>
       </div>
 
-      {/* Filters */}
+      {/* ── Stats cards ── */}
+      {isIngest ? (
+        <div className="grid grid-cols-3 gap-4">
+          <Card>
+            <div className="flex items-center gap-3">
+              <Activity className="w-5 h-5 text-brand-500" />
+              <div>
+                <p className="text-2xl font-bold text-gray-900">{ingestLogs.length}</p>
+                <p className="text-xs text-gray-500">Total Requests</p>
+              </div>
+            </div>
+          </Card>
+          <Card>
+            <div className="flex items-center gap-3">
+              <CheckCircle className="w-5 h-5 text-emerald-500" />
+              <div>
+                <p className="text-2xl font-bold text-gray-900">{ingestAccepted}</p>
+                <p className="text-xs text-gray-500">Accepted</p>
+              </div>
+            </div>
+          </Card>
+          <Card>
+            <div className="flex items-center gap-3">
+              <XCircle className="w-5 h-5 text-red-500" />
+              <div>
+                <p className="text-2xl font-bold text-gray-900">{ingestRejected}</p>
+                <p className="text-xs text-gray-500">Rejected</p>
+              </div>
+            </div>
+          </Card>
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-4">
+          <Card>
+            <div className="flex items-center gap-3">
+              <Activity className="w-5 h-5 text-brand-500" />
+              <div>
+                <p className="text-2xl font-bold text-gray-900">{procLogs.length}</p>
+                <p className="text-xs text-gray-500">Total Pushes</p>
+              </div>
+            </div>
+          </Card>
+          <Card>
+            <div className="flex items-center gap-3">
+              <CheckCircle className="w-5 h-5 text-emerald-500" />
+              <div>
+                <p className="text-2xl font-bold text-gray-900">{procSuccess}</p>
+                <p className="text-xs text-gray-500">Push Successful</p>
+              </div>
+            </div>
+          </Card>
+          <Card>
+            <div className="flex items-center gap-3">
+              <XCircle className="w-5 h-5 text-red-500" />
+              <div>
+                <p className="text-2xl font-bold text-gray-900">{procFail}</p>
+                <p className="text-xs text-gray-500">Push Failed</p>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ── Filters ── */}
       <div className="flex items-center gap-3 flex-wrap">
         <Filter className="w-4 h-4 text-gray-400" />
-        
-              <span className="text-sm text-gray-500">Filter by Source:</span>
+        <span className="text-sm text-gray-500">Filter by Source:</span>
 
         <button
           onClick={() => setFilterSource(null)}
@@ -254,7 +456,7 @@ export default function LogsPage() {
           All
         </button>
 
-        {sources.map((s) => (
+        {sources.map(s => (
           <button
             key={s}
             onClick={() => setFilterSource(s)}
@@ -269,11 +471,10 @@ export default function LogsPage() {
         ))}
 
         <div className="ml-auto flex items-center gap-2">
-          {/* Show latest */}
-              <span className="text-xs text-gray-400">Show recent</span>
+          <span className="text-xs text-gray-400">Show recent</span>
           <select
             value={limit}
-            onChange={(e) => setLimit(Number(e.target.value))}
+            onChange={e => setLimit(Number(e.target.value))}
             className="text-xs border border-gray-300 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-brand-400"
           >
             <option value={50}>50 entries</option>
@@ -284,7 +485,7 @@ export default function LogsPage() {
         </div>
       </div>
 
-      {/* Log list */}
+      {/* ── Log list ── */}
       <div>
         {isLoading && (
           <div className="flex items-center justify-center py-12 text-gray-400 gap-2">
@@ -293,26 +494,48 @@ export default function LogsPage() {
           </div>
         )}
 
-        {!isLoading && logs.length === 0 && (
+        {/* Ingest tab content */}
+        {isIngest && !isLoading && ingestLogs.length === 0 && (
           <Card>
             <div className="text-center py-12">
-              <Activity className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+              <ArrowDownToLine className="w-10 h-10 text-gray-300 mx-auto mb-3" />
               <p className="text-sm text-gray-500">
-                
-              {filterSource ? `No logs for "${filterSource}"` : 'No processing logs yet'}
+                {filterSource ? `No ingest logs for "${filterSource}"` : 'No ingest logs yet'}
               </p>
               <p className="text-xs text-gray-400 mt-1">
-                After sending a test event via /webhook, Worker processing results will appear here
-              {/* Send a test event via /webhook — Worker processing results will appear here */}
+                Every POST to /webhook will appear here — including rejected requests and the rejection reason
               </p>
             </div>
           </Card>
         )}
 
-        {!isLoading && logs.length > 0 && (
+        {isIngest && !isLoading && ingestLogs.length > 0 && (
           <div className="space-y-2">
-            {logs.map((log, i) => (
-              <LogRow key={`${log.msg_id}-${i}`} log={log} />
+            {ingestLogs.map((log, i) => (
+              <IngestRow key={`${log.ts}-${log.ip}-${i}`} log={log} />
+            ))}
+          </div>
+        )}
+
+        {/* Processing tab content */}
+        {!isIngest && !isLoading && procLogs.length === 0 && (
+          <Card>
+            <div className="text-center py-12">
+              <Activity className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+              <p className="text-sm text-gray-500">
+                {filterSource ? `No processing logs for "${filterSource}"` : 'No processing logs yet'}
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                After a webhook is accepted and processed by the worker, results appear here
+              </p>
+            </div>
+          </Card>
+        )}
+
+        {!isIngest && !isLoading && procLogs.length > 0 && (
+          <div className="space-y-2">
+            {procLogs.map((log, i) => (
+              <ProcessingRow key={`${log.msg_id}-${i}`} log={log} />
             ))}
           </div>
         )}
@@ -320,8 +543,7 @@ export default function LogsPage() {
 
       {/* Auto-refresh hint */}
       <p className="text-xs text-gray-400 text-center">
-        Auto-refreshes every 10 s · shows the latest {limit} records
-          {/* Auto-refreshes every 10 seconds · showing up to {limit} most recent entries */}
+        Auto-refreshes every 10 s · showing the latest {limit} records
       </p>
     </div>
   )
