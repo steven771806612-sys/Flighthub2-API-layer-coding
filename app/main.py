@@ -835,6 +835,13 @@ async def diagnostic(payload: dict[str, Any], x_admin_token: str | None = Header
     except Exception as e:
         result["log_error"] = str(e)
 
+    # ── 4. Redis URL actually in use (masked for security) ────────────────────
+    raw_url = settings.REDIS_URL or ""
+    # Mask password: redis://:password@host:port → redis://***@host:port
+    import re as _re
+    masked = _re.sub(r"(rediss?://)([^@]+@)", r"\1***@", raw_url)
+    result["redis_url_in_use"] = masked or "redis://127.0.0.1:6379/0 (fallback)"
+
     return {"status": "ok", **result}
 
 
