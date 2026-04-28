@@ -73,6 +73,7 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
   })
 
   const tokenValue = watch('token')
+  const authEnabledValue = watch('enabled')
 
   // Load existing config (only header_name and enabled are restored; backend masks the token, so token field is left blank for user to re-enter)
   const { data: existingAuth } = useQuery({
@@ -200,11 +201,15 @@ Unsaved changes — please click "Save Auth Config" to save
           <p className="text-xs text-gray-400">Token is write-only — backend returns masked value on read</p>
         </div>
 
+        {/* Curl example — auth header line is omitted when authentication is disabled */}
         <div className="p-3 bg-gray-900 rounded-lg font-mono text-xs text-green-400 border border-gray-700 overflow-x-auto">
           <span className="text-gray-500"># FlightHub Webhook Transformer — ingest endpoint</span><br />
           curl -X POST {typeof window !== 'undefined' ? window.location.origin : ''}/webhook \<br />
           &nbsp;&nbsp;-H &quot;Content-Type: application/json&quot; \<br />
-          &nbsp;&nbsp;-H &quot;X-MW-Token: {tokenValue || (hasExistingToken ? '<existing-token>' : '<token>')}&quot; \<br />
+          {/* Only show auth header when authentication is enabled (取消鉴权时不显示该 header) */}
+          {authEnabledValue && (
+            <>&nbsp;&nbsp;-H &quot;{watch('header_name') || 'X-MW-Token'}: {tokenValue || (hasExistingToken ? '<existing-token>' : '<token>')}&quot; \<br /></>
+          )}
           &nbsp;&nbsp;-d &apos;{`{"source":"${sourceId}","webhook_event":{...}}`}&apos;
         </div>
 
