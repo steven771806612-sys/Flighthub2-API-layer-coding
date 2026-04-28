@@ -136,18 +136,81 @@ async def webhook_ingest(payload: dict[str, Any], request: Request):
     assert bus is not None
     assert repo is not None
 
+    received_at = int(time.time())
+    client_ip = (
+        request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        or request.headers.get("x-real-ip", "")
+        or (request.client.host if request.client else "unknown")
+    )
+
+    # Collect request headers (safe subset — exclude auth values for security)
+    _SAFE_HEADERS = {
+        "content-type", "user-agent", "x-forwarded-for", "x-real-ip",
+        "accept", "accept-encoding", "host",
+    }
+    req_headers: dict[str, str] = {}
+    for k, v in request.headers.items():
+        kl = k.lower()
+        if kl in _SAFE_HEADERS:
+            req_headers[kl] = v
+        else:
+            # For auth/custom headers: show the header NAME but mask the value
+            # so users can see whether the header was sent at all
+            req_headers[kl] = "***"
+
     source = payload.get("source") or settings.DEFAULT_SOURCE
     webhook_event = payload.get("webhook_event")
+
+    # ── Helper: write ingest log entry (fire-and-forget, never raises) ────────
+    async def _log_ingest(status_code: int, result: str, reject_reason: str = "") -> None:
+        try:
+            entry = {
+                "ts":             received_at,
+                "source":         source,
+                "ip":             client_ip,
+                "method":         "POST",
+                "path":           str(request.url.path),
+                "status_code":    status_code,
+                "result":         result,        # "accepted" | "rejected" | "error"
+                "reject_reason":  reject_reason, # human-readable rejection cause
+                "request_headers": req_headers,
+                "body_size":      len(await request.body()) if hasattr(request, "_body") else 0,
+            }
+            await repo.append_ingest_log(entry)
+        except Exception:
+            pass  # never let logging crash the main flow
+
+    # ── Validate payload ──────────────────────────────────────────────────────
     if webhook_event is None:
+        await _log_ingest(400, "error", "missing webhook_event field in request body")
         return {"status": "error", "message": "missing webhook_event"}
 
-    # inbound auth gate (pass -> enqueue)
+    # ── Inbound auth gate ─────────────────────────────────────────────────────
     srcauth = await repo.get_source_auth(source)
-    _require_source_auth(source, request, srcauth)
 
-    received_at = int(time.time())
+    try:
+        _require_source_auth(source, request, srcauth)
+    except HTTPException as exc:
+        # Build a human-readable rejection reason
+        detail = str(exc.detail)
+        if "source_not_registered_or_auth_missing" in detail:
+            reason = f"Source '{source}' not registered or auth config missing"
+        elif detail == "auth_failed":
+            header_name = srcauth.get("header_name", "X-MW-Token") if isinstance(srcauth, dict) else "X-MW-Token"
+            got = request.headers.get(header_name, "")
+            if not got:
+                reason = f"Auth header '{header_name}' not found in request"
+            else:
+                reason = f"Auth header '{header_name}' present but token value incorrect"
+        elif "unsupported_auth_mode" in detail:
+            reason = f"Unsupported auth mode: {detail}"
+        else:
+            reason = detail
 
-    # store some request meta for debugging/audit
+        await _log_ingest(exc.status_code, "rejected", reason)
+        raise  # re-raise so FastAPI returns the original HTTP error response
+
+    # ── Accepted — enqueue ────────────────────────────────────────────────────
     hdr = {}
     for k in ("content-type", "user-agent", "x-forwarded-for"):
         if k in request.headers:
@@ -161,6 +224,7 @@ async def webhook_ingest(payload: dict[str, Any], request: Request):
     }
 
     await bus.produce(msg)
+    await _log_ingest(200, "accepted", "")
     return {"status": "accepted", "queue": "redis_stream", "stream": settings.STREAM_KEY_RAW}
 
 
@@ -772,3 +836,41 @@ async def diagnostic(payload: dict[str, Any], x_admin_token: str | None = Header
         result["log_error"] = str(e)
 
     return {"status": "ok", **result}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# INGEST LOGS  — per-request access log for POST /webhook
+# Captures every inbound HTTP request (accepted + rejected) with reason
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.post("/admin/ingest-logs/get")
+async def ingest_logs_get(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Retrieve recent ingest (access) logs for POST /webhook.
+
+    Input:  { source?: str, limit?: int }
+    Output: { status, logs: [...] }
+    """
+    global repo
+    assert repo is not None
+    _require_admin(x_admin_token)
+
+    source: str | None = payload.get("source") or None
+    limit = int(payload.get("limit") or 100)
+    limit = max(1, min(limit, 500))
+
+    logs = await repo.get_ingest_logs(source, limit)
+    return {"status": "ok", "source": source, "logs": logs}
+
+
+@app.post("/admin/ingest-logs/clear")
+async def ingest_logs_clear(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Clear all ingest logs.
+
+    Input:  {} (source filter not supported — always clears global list)
+    """
+    global repo
+    assert repo is not None
+    _require_admin(x_admin_token)
+
+    deleted = await repo.clear_ingest_logs()
+    return {"status": "ok", "deleted": deleted}
