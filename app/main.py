@@ -497,6 +497,26 @@ async def mapping_set(payload: dict[str, Any], x_admin_token: str | None = Heade
     return {"status": "ok"}
 
 
+@app.post("/admin/mapping/reset")
+async def mapping_reset(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Reset a source mapping to the built-in DEFAULT_MAPPING.
+
+    Useful when a source has an empty or broken mapping stored in Redis.
+    After reset, the next pipeline run will use the default keyword-matching
+    rules (creator_id, level, description, event.name, latitude, longitude).
+    """
+    global repo
+    assert repo is not None
+    _require_admin(x_admin_token)
+
+    source = payload.get("source")
+    if not source:
+        return {"status": "error", "message": "missing source"}
+
+    await repo.set_mapping(source, repo._DEFAULT_MAPPING)
+    return {"status": "ok", "message": f"mapping for source '{source}' reset to DEFAULT_MAPPING"}
+
+
 @app.post("/admin/flighthub/get")
 async def flighthub_get(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
     global repo

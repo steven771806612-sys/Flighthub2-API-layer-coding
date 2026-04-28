@@ -198,6 +198,15 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
     onError: (e: Error) => addToast('error', e.message),
   })
 
+  const { mutate: resetMapping, isPending: resetting } = useMutation({
+    mutationFn: () => mappingService.reset(activeSource),
+    onSuccess: (msg) => {
+      addToast('success', msg ?? 'Mapping reset to defaults')
+      qc.invalidateQueries({ queryKey: ['mapping', activeSource] })
+    },
+    onError: (e: Error) => addToast('error', e.message),
+  })
+
   const handleAutoSuggest = () => {
     const suggested = autoSuggestAll(normalizedFields)
     const merged = { ...mapping }
@@ -287,6 +296,22 @@ export function MappingBoard({ wizardSourceId }: MappingBoardProps = {}) {
             Auto-Suggest
           </button>
         )}
+
+        {/* Reset to defaults */}
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm(`Reset mapping for "${activeSource}" to built-in defaults? This will overwrite the current mapping.`)) {
+              resetMapping()
+            }
+          }}
+          disabled={!activeSource || resetting}
+          title="Reset to default keyword-matching rules (creator_id, level, description, event.name, lat, lng)"
+          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${resetting ? 'animate-spin' : ''}`} />
+          {resetting ? 'Resetting…' : 'Reset to Defaults'}
+        </button>
 
         {/* Save */}
         <button

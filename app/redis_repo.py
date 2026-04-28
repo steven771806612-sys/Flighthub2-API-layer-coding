@@ -79,12 +79,22 @@ class RedisRepo:
     async def get_mapping(self, source: str) -> dict:
         raw = await self.redis.get(self._k_map(source))
         if not raw:
-            # Auto-initialize new source with a sensible default mapping so
-            # common field names (creator_id, level, description, event.name)
-            # are extracted out-of-the-box without requiring manual configuration.
+            # Key absent — write DEFAULT_MAPPING and return it
             await self.redis.set(self._k_map(source), json.dumps(self._DEFAULT_MAPPING, ensure_ascii=False), nx=True)
             return self._DEFAULT_MAPPING
-        return json.loads(raw)
+
+        stored = json.loads(raw)
+        # Guard: if the stored value is an empty dict {} or has no rules at all
+        # (no "mappings" list AND no "dsl" dict), treat it as uninitialized and
+        # return DEFAULT_MAPPING so the pipeline still works out-of-the-box.
+        # This handles the case where a source was registered before the
+        # auto-init logic existed, leaving {} in Redis.
+        if not stored or (not stored.get("mappings") and not stored.get("dsl")):
+            # Upgrade the stored key in-place so future reads also get defaults.
+            await self.redis.set(self._k_map(source), json.dumps(self._DEFAULT_MAPPING, ensure_ascii=False))
+            return self._DEFAULT_MAPPING
+
+        return stored
 
     async def set_mapping(self, source: str, mapping: dict) -> None:
         await self.redis.set(self._k_map(source), json.dumps(mapping, ensure_ascii=False))
