@@ -475,14 +475,26 @@ function DiagnosticPanel() {
             Pipeline Diagnostics
           </span>
         </div>
-        <button
-          type="button"
-          onClick={() => refetch()}
-          className="text-gray-400 hover:text-gray-600 transition-colors"
-          title="Refresh diagnostic"
-        >
-          <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Direct link to ping endpoint — opens raw JSON in new tab */}
+          <a
+            href="/admin/ping"
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-blue-500 hover:text-blue-700 underline font-mono"
+            title="Open /admin/ping in new tab for raw Redis + stream diagnostics"
+          >
+            /admin/ping ↗
+          </a>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="text-gray-400 hover:text-gray-600 transition-colors"
+            title="Refresh diagnostic"
+          >
+            <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
       {/* ── Redis URL currently in use ── */}

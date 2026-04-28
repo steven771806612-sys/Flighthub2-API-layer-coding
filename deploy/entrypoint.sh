@@ -92,20 +92,9 @@ else
     echo "[entrypoint] Bootstrap WARNING: non-fatal, continuing..." >&2
 fi
 
-# ── 6. 确保所有 Redis 变量都存在（supervisord %(ENV_*)s 语法要求变量存在）──────
-# supervisord 的 %(ENV_VAR)s 如果对应变量不在环境里会直接报错退出。
-# 把所有可能用到的变量设置兜底空值，已有值的不覆盖。
-export REDIS_PRIVATE_URL="${REDIS_PRIVATE_URL:-}"
-export REDIS_PUBLIC_URL="${REDIS_PUBLIC_URL:-}"
-export REDISURL="${REDISURL:-}"
-export REDIS_TLS_URL="${REDIS_TLS_URL:-}"
+# ── 6. Ensure ADMIN_TOKEN exists for supervisord %(ENV_ADMIN_TOKEN)s ──────────
 export ADMIN_TOKEN="${ADMIN_TOKEN:-}"
 
-echo "[entrypoint] Env snapshot for supervisord:"
-echo "  REDIS_URL      = ${REDIS_URL:0:40}..."
-echo "  PORT           = ${PORT}"
-echo "  ADMIN_TOKEN    = ${ADMIN_TOKEN:+<set>}${ADMIN_TOKEN:-<not set>}"
-
 # ── 7. 启动 supervisord（前台运行，接管所有子进程）─────────────────────────
-echo "[entrypoint] Starting supervisord (PORT=${PORT})..."
+echo "[entrypoint] Starting supervisord (PORT=${PORT}, REDIS_URL=${REDIS_URL:0:40}...)..."
 exec supervisord -c /app/deploy/supervisord.conf

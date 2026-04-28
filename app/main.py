@@ -88,6 +88,68 @@ def _require_admin(x_admin_token: str | None):
         raise PermissionError("admin token invalid")
 
 
+@app.get("/admin/ping")
+async def admin_ping():
+    """Public health-check: verifies Redis connectivity and returns stream state.
+    No auth required — safe to curl from Railway shell for quick diagnosis.
+    """
+    global redis
+    import re as _re
+    result: dict[str, Any] = {"status": "ok"}
+
+    # Masked Redis URL
+    raw = settings.REDIS_URL or ""
+    result["redis_url"] = _re.sub(r"(rediss?://)([^@]+@)", r"\1***@", raw)
+    result["is_localhost"] = ("127.0.0.1" in raw or "localhost" in raw)
+
+    # Redis ping
+    try:
+        assert redis is not None
+        await redis.ping()
+        result["redis_ping"] = "pong"
+    except Exception as e:
+        result["redis_ping"] = f"ERROR: {e}"
+
+    # Stream info
+    try:
+        assert redis is not None
+        xlen = await redis.xlen(settings.STREAM_KEY_RAW)
+        result["stream_xlen"] = xlen
+
+        groups = await redis.xinfo_groups(settings.STREAM_KEY_RAW)
+        result["stream_groups"] = [
+            {
+                "name": g.get("name"),
+                "pending": g.get("pending", 0),
+                "consumers": g.get("consumers", 0),
+                "last_delivered_id": g.get("last-delivered-id"),
+            }
+            for g in groups
+        ]
+        result["stream_total_pending"] = sum(g.get("pending", 0) for g in groups)
+
+        # Consumers detail
+        consumers_detail = []
+        for g in groups:
+            try:
+                consumers = await redis.xinfo_consumers(settings.STREAM_KEY_RAW, g["name"])
+                for c in consumers:
+                    consumers_detail.append({
+                        "group": g.get("name"),
+                        "consumer": c.get("name"),
+                        "pending": c.get("pending", 0),
+                        "idle_ms": c.get("idle", 0),
+                    })
+            except Exception:
+                pass
+        result["consumers"] = consumers_detail
+
+    except Exception as e:
+        result["stream_error"] = str(e)
+
+    return result
+
+
 @app.on_event("startup")
 async def on_startup():
     global redis, repo, bus
