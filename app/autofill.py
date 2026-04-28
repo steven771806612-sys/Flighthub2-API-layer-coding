@@ -27,10 +27,12 @@ Autofill rules (in priority order)
 ------------------------------------
 1. Value already present in mapped dict → keep
 2. Alias fields in mapped dict (e.g. "latitude" for "params.latitude") → use
-3. Device location from device_info (lat/lng from uw:device record) → inject
-4. Configured default in autofill_conf → apply
-5. Hardcoded default → apply
-6. Field remains missing → add to missing[] list
+3. Flat-event fallback — look up well-known keys directly in the flat dict
+   (handles the case where no mapping is configured for a source yet)
+4. Device location from device_info (lat/lng from uw:device record) → inject
+5. Configured default in autofill_conf → apply
+6. Hardcoded default → apply
+7. Field remains missing → add to missing[] list
 
 Device ID resolution
 --------------------
@@ -41,7 +43,7 @@ before fetching device_info.
 
 Public API
 ----------
-    autofill(mapped, device_info, autofill_conf) -> (filled, missing)
+    autofill(mapped, device_info, autofill_conf, flat_event=None) -> (filled, missing)
 """
 from __future__ import annotations
 
@@ -76,11 +78,28 @@ _FH2_TOP: list[tuple[str, type, Any]] = [
     ("name",          str,   "FlightHub2-Event"),
 ]
 
+# ─── Flat-event fallback keys ──────────────────────────────────────────────────
+# When the mapping stage produces no value for a field, these flat-dict keys are
+# tried in order before resorting to device data / configured defaults.
+# This ensures payloads whose fields match common names work out-of-the-box
+# without requiring a custom mapping to be configured first.
+_FLAT_FALLBACK: dict[str, list[str]] = {
+    "params.creator":   ["creator_id", "creator", "operator_id", "operator", "user_id"],
+    "params.latitude":  ["latitude", "lat", "location.lat", "gps.lat", "position.lat"],
+    "params.longitude": ["longitude", "lng", "lon", "location.lng", "gps.lng", "position.lng"],
+    "params.level":     ["level", "severity", "priority", "alert_level", "event_level"],
+    "params.desc":      ["description", "desc", "message", "msg", "content", "detail"],
+    # name: try event.name (nested, flattened to "event.name"), then plain name
+    "name":             ["name", "event_name", "event.name", "event.type",
+                         "eventName", "eventType", "alert_name", "title"],
+}
+
 
 def autofill(
     mapped: dict[str, Any],
     device_info: dict[str, Any],
     autofill_conf: dict[str, Any],
+    flat_event: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """Fill missing FH2 body fields, report what could not be filled.
 
@@ -100,6 +119,11 @@ def autofill(
                 "params.creator":   "auto",
             }
 
+    flat_event : dict | None
+        Flattened webhook payload (output of flatten_json).  When provided,
+        used as a last-resort fallback before hardcoded defaults — enables
+        out-of-the-box field extraction even when no mapping is configured.
+
     Returns
     -------
     (filled, missing) : tuple
@@ -110,6 +134,7 @@ def autofill(
     missing: list[str] = []
 
     loc = device_info.get("location") or {}
+    _flat = flat_event or {}
 
     # Device field mapping: body_path → device location key
     _device_map: dict[str, str] = {
@@ -150,17 +175,28 @@ def autofill(
                     val = candidate
                     break
 
-        # 3. Try device location (GPS injected from device registry)
+        # 3. Flat-event fallback — read directly from the flattened payload
+        #    when the mapping stage produced nothing useful.  This makes the
+        #    pipeline work out-of-the-box for common field names even when no
+        #    custom mapping has been configured for the source.
+        if val is None and _flat:
+            for flat_key in _FLAT_FALLBACK.get(body_path, []):
+                candidate = _flat.get(flat_key)
+                if candidate is not None and not (isinstance(candidate, str) and not str(candidate).strip()):
+                    val = candidate
+                    break
+
+        # 4. Try device location (GPS injected from device registry)
         if val is None and body_path in _device_map:
             device_key = _device_map[body_path]
             if loc.get(device_key) is not None:
                 val = loc[device_key]
 
-        # 4. Try autofill_conf
+        # 5. Try autofill_conf
         if val is None and body_path in autofill_conf:
             val = autofill_conf[body_path]
 
-        # 5. Hardcoded default
+        # 6. Hardcoded default
         if val is None and hardcoded_default is not None:
             val = hardcoded_default
 
