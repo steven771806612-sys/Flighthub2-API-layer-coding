@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/Button'
 import {
   RefreshCw, Trash2, CheckCircle, XCircle, AlertTriangle,
   ChevronDown, ChevronRight, Clock, Activity, Filter,
-  ArrowDownToLine, Zap,
+  ArrowDownToLine, Zap, Copy, Check, ExternalLink,
 } from 'lucide-react'
 import type { ProcessingLog, IngestLog } from '@/services'
 
@@ -34,6 +34,61 @@ function httpBadge(status: number) {
   if (status === 0)
     return <span className="px-1.5 py-0.5 text-xs font-mono rounded-full bg-gray-100 text-gray-500 border border-gray-200">–</span>
   return <span className="px-1.5 py-0.5 text-xs font-mono rounded-full bg-red-100 text-red-700 border border-red-200">{status}</span>
+}
+
+// ─── Webhook URL banner ───────────────────────────────────────────────────────
+// Always shown at the top of the Ingest Logs tab so operators can quickly copy
+// the URL and send it to whoever runs the third-party system.
+function WebhookUrlBanner() {
+  const [copied, setCopied] = useState(false)
+  const url = typeof window !== 'undefined' ? `${window.location.origin}/webhook` : '/webhook'
+
+  const copy = () => {
+    navigator.clipboard.writeText(url)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="rounded-xl border-2 border-blue-300 bg-blue-50 overflow-hidden">
+      {/* Blue header */}
+      <div className="flex items-center gap-3 px-4 py-2.5 bg-blue-600">
+        <ExternalLink className="w-4 h-4 text-white shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-white font-semibold text-sm leading-none">Webhook Ingest URL</p>
+          <p className="text-blue-200 text-xs mt-0.5">
+            Third-party systems must POST to this URL — every request will be logged below
+          </p>
+        </div>
+        <span className="text-xs font-mono font-bold bg-white/20 text-white px-2 py-1 rounded-full shrink-0">
+          POST
+        </span>
+      </div>
+
+      {/* URL row */}
+      <div className="flex items-center gap-3 px-4 py-3">
+        <code className="flex-1 text-sm font-mono text-blue-900 break-all select-all">{url}</code>
+        <button
+          onClick={copy}
+          className="shrink-0 flex items-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg transition-colors"
+        >
+          {copied
+            ? <><Check className="w-3.5 h-3.5" />Copied</>
+            : <><Copy  className="w-3.5 h-3.5" />Copy URL</>}
+        </button>
+      </div>
+
+      {/* Body hint */}
+      <div className="border-t border-blue-200 px-4 py-2.5 bg-white/60">
+        <p className="text-xs text-blue-700">
+          <span className="font-semibold">Required JSON body: </span>
+          <code className="bg-blue-100 px-1.5 py-0.5 rounded font-mono">
+            {'{ "source": "<source-id>", "webhook_event": { ... } }'}
+          </code>
+        </p>
+      </div>
+    </div>
+  )
 }
 
 // ─── Tab 1: Ingest Log row ────────────────────────────────────────────────────
@@ -484,6 +539,9 @@ export default function LogsPage() {
           </select>
         </div>
       </div>
+
+      {/* ── Webhook URL banner (Ingest tab only) ── */}
+      {isIngest && <WebhookUrlBanner />}
 
       {/* ── Log list ── */}
       <div>
