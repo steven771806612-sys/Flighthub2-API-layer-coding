@@ -659,3 +659,116 @@ async def logs_clear(payload: dict[str, Any], x_admin_token: str | None = Header
     source: str | None = payload.get("source") or None
     deleted = await repo.clear_logs(source)
     return {"status": "ok", "source": source, "deleted": deleted}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# DIAGNOSTIC  — surface stream lag + fhcfg validity for troubleshooting
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.post("/admin/diagnostic")
+async def diagnostic(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Return real-time pipeline health info.
+
+    Checks:
+      - Redis stream pending message count (backlog)
+      - Per-source fhcfg validity (endpoint, token, uuid, workflow_uuid)
+      - Recent log counts (success / fail)
+
+    Input:  { source?: str }
+    Output: { stream_pending, consumer_groups, fhcfg_issues, log_counts }
+    """
+    global repo, redis
+    assert repo is not None
+    assert redis is not None
+    _require_admin(x_admin_token)
+
+    source: str | None = payload.get("source") or None
+    result: dict[str, Any] = {}
+
+    # ── 1. Redis Stream backlog ───────────────────────────────────────────────
+    try:
+        # Total messages not yet ACK'd by any consumer in the group
+        groups = await redis.xinfo_groups(settings.STREAM_KEY_RAW)
+        result["consumer_groups"] = [
+            {
+                "name":    g.get("name"),
+                "pending": g.get("pending", 0),
+                "consumers": g.get("consumers", 0),
+                "last_delivered_id": g.get("last-delivered-id"),
+            }
+            for g in groups
+        ]
+        total_pending = sum(g.get("pending", 0) for g in groups)
+        result["stream_pending_total"] = total_pending
+    except Exception as e:
+        result["stream_info_error"] = str(e)
+
+    # ── 2. fhcfg validity check ───────────────────────────────────────────────
+    sources_to_check = [source] if source else await repo.list_sources()
+    fhcfg_issues: dict[str, list[str]] = {}
+
+    for src in sources_to_check:
+        issues = []
+        cfg = await repo.get_fhcfg(src)
+        if not isinstance(cfg, dict) or not cfg:
+            issues.append("fhcfg_missing")
+        else:
+            hdrs = cfg.get("headers") or {}
+            endpoint = cfg.get("endpoint") or ""
+
+            if not endpoint or endpoint == settings.DEFAULT_FLIGHTHUB_ENDPOINT and not hdrs.get("X-User-Token"):
+                # endpoint is placeholder but no token — probably unconfigured
+                pass  # endpoint alone is OK
+
+            token = hdrs.get("X-User-Token") or ""
+            proj_uuid = hdrs.get("x-project-uuid") or ""
+            tb = cfg.get("template_body") or {}
+            wf_uuid = tb.get("workflow_uuid") or ""
+
+            if not token:
+                issues.append("X-User-Token_empty")
+            elif token in ("YOUR_SECRET_TOKEN",):
+                issues.append("X-User-Token_is_placeholder")
+
+            if not proj_uuid:
+                issues.append("x-project-uuid_empty")
+            elif proj_uuid in ("YOUR_PROJECT_UUID",):
+                issues.append("x-project-uuid_is_placeholder")
+
+            if not wf_uuid:
+                issues.append("workflow_uuid_empty")
+            elif wf_uuid in ("YOUR_WORKFLOW_UUID",):
+                issues.append("workflow_uuid_is_placeholder")
+
+            if not endpoint:
+                issues.append("endpoint_empty")
+
+        if issues:
+            fhcfg_issues[src] = issues
+
+    result["fhcfg_issues"] = fhcfg_issues
+    result["fhcfg_ok"] = [s for s in sources_to_check if s not in fhcfg_issues]
+
+    # ── 3. Recent log counts ──────────────────────────────────────────────────
+    try:
+        logs = await repo.get_logs(source, limit=200)
+        result["log_counts"] = {
+            "total":   len(logs),
+            "success": sum(1 for l in logs if l.get("ok")),
+            "fail":    sum(1 for l in logs if not l.get("ok")),
+        }
+        # Most recent entry
+        if logs:
+            latest = logs[0]
+            result["latest_log"] = {
+                "ts":          latest.get("ts"),
+                "http_status": latest.get("http_status"),
+                "ok":          latest.get("ok"),
+                "source":      latest.get("source"),
+                "missing":     latest.get("missing_fields"),
+                "fh2_response": (latest.get("fh2_response") or "")[:300],
+            }
+    except Exception as e:
+        result["log_error"] = str(e)
+
+    return {"status": "ok", **result}

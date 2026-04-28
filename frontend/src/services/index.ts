@@ -193,3 +193,37 @@ export async function runIntegrationTest(p: TestPayload): Promise<TestResult> {
     return { authStatus: 0, queueAccepted: false, error: String(e) }
   }
 }
+
+// ─── Diagnostic ───────────────────────────────────────────────────────────────
+
+export interface DiagnosticResult {
+  status: string
+  stream_pending_total?: number
+  stream_info_error?: string
+  consumer_groups?: Array<{
+    name: string
+    pending: number
+    consumers: number
+    last_delivered_id: string
+  }>
+  fhcfg_issues?: Record<string, string[]>
+  fhcfg_ok?: string[]
+  log_counts?: { total: number; success: number; fail: number }
+  latest_log?: {
+    ts: number
+    http_status: number
+    ok: boolean
+    source: string
+    missing: string[]
+    fh2_response: string
+  }
+}
+
+export const diagnosticService = {
+  async run(sourceId?: string): Promise<DiagnosticResult> {
+    const { data } = await apiClient.post('/admin/diagnostic', {
+      ...(sourceId ? { source: sourceId } : {}),
+    })
+    return data as DiagnosticResult
+  },
+}
