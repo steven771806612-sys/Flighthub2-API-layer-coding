@@ -144,62 +144,69 @@ Unsaved changes — please click "Save Auth Config" to save
           <label htmlFor="enabled" className="text-sm font-medium text-gray-700">Enable authentication</label>
         </div>
 
-        <Input
-          label="Header Name"
-          error={errors.header_name?.message}
-          {...register('header_name', { required: 'Required' })}
-        />
+        {/* Header Name & Token — only shown/required when authentication is enabled
+             当取消鉴权时隐藏这两个字段，无需配置 header 名称和 token */}
+        {authEnabledValue && (
+          <>
+            <Input
+              label="Header Name"
+              error={errors.header_name?.message}
+              {...register('header_name', { required: authEnabledValue ? 'Required' : false })}
+            />
 
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium text-gray-700">Token</label>
-            {hasExistingToken && (
-              <span className="text-xs text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                ✓ Token already set — leave blank to keep existing
-              </span>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <input
-                type={showToken ? 'text' : 'password'}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono pr-10 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                placeholder={hasExistingToken ? 'Leave blank to keep existing token' : 'Set a strong random token'}
-                {...register('token', {
-                  // When a token already exists, the field is optional (do not modify); when no token, it is required
-                  required: hasExistingToken ? false : 'Required',
-                })}
-              />
-              <button
-                type="button"
-                onClick={() => setShowToken(!showToken)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              >
-                {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-gray-700">Token</label>
+                {hasExistingToken && (
+                  <span className="text-xs text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                    ✓ Token already set — leave blank to keep existing
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <input
+                    type={showToken ? 'text' : 'password'}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono pr-10 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                    placeholder={hasExistingToken ? 'Leave blank to keep existing token' : 'Set a strong random token'}
+                    {...register('token', {
+                      // Required only when auth is enabled and no token exists yet
+                      // 取消鉴权时 token 字段不是必填
+                      required: authEnabledValue && !hasExistingToken ? 'Required' : false,
+                    })}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowToken(!showToken)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  onClick={() => setValue('token', generateToken())}
+                  title="Generate random token"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  onClick={() => { navigator.clipboard.writeText(tokenValue); addToast('info', 'Copied!') }}
+                  title="Copy token"
+                >
+                  <Copy className="w-4 h-4" />
+                </Button>
+              </div>
+              {errors.token && <p className="text-xs text-red-600">{errors.token.message}</p>}
+              <p className="text-xs text-gray-400">Token is write-only — backend returns masked value on read</p>
             </div>
-            <Button
-              type="button"
-              variant="secondary"
-              size="md"
-              onClick={() => setValue('token', generateToken())}
-              title="Generate random token"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="md"
-              onClick={() => { navigator.clipboard.writeText(tokenValue); addToast('info', 'Copied!') }}
-              title="Copy token"
-            >
-              <Copy className="w-4 h-4" />
-            </Button>
-          </div>
-          {errors.token && <p className="text-xs text-red-600">{errors.token.message}</p>}
-          <p className="text-xs text-gray-400">Token is write-only — backend returns masked value on read</p>
-        </div>
+          </>
+        )}
 
         {/* Curl example — auth header line is omitted when authentication is disabled */}
         <div className="p-3 bg-gray-900 rounded-lg font-mono text-xs text-green-400 border border-gray-700 overflow-x-auto">
