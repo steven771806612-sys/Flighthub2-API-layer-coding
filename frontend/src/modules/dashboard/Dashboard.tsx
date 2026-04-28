@@ -3,7 +3,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
   sourceService, authService, mappingService, egressService, debugService,
-  diagnosticService,
+  diagnosticService, streamService,
 } from '@/services'
 import type { DiagnosticResult } from '@/services'
 import { useSourceStore, useWizardStore } from '@/store'
@@ -453,6 +453,17 @@ function DiagnosticPanel() {
     refetchInterval: 30_000,
   })
 
+  const [drainResult, setDrainResult] = useState<string | null>(null)
+  const { mutate: drainPending, isPending: isDraining } = useMutation({
+    mutationFn: () => streamService.drainPending(),
+    onSuccess: (result) => {
+      setDrainResult(result.message)
+      setTimeout(() => setDrainResult(null), 8000)
+      refetch()
+    },
+    onError: (e: Error) => setDrainResult(`Error: ${e.message}`),
+  })
+
   if (!data) return null
 
   const issues     = data.fhcfg_issues ?? {}
@@ -528,8 +539,24 @@ function DiagnosticPanel() {
             </div>
           ))}
           {pending > 0 && (
-            <p className="text-red-600 pt-0.5">
-              Messages are stuck — worker cannot consume them (likely wrong Redis URL). Re-deploy to fix.
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <p className="text-red-600 text-xs">
+                Messages are stuck in PEL — worker may have crashed or restarted.
+              </p>
+              <button
+                type="button"
+                onClick={() => drainPending()}
+                disabled={isDraining}
+                className="shrink-0 px-2 py-1 text-xs rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 font-medium"
+                title="Reclaim pending messages and re-queue them for processing"
+              >
+                {isDraining ? 'Draining…' : 'Drain Pending'}
+              </button>
+            </div>
+          )}
+          {drainResult && (
+            <p className="text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1 mt-1">
+              {drainResult}
             </p>
           )}
         </div>

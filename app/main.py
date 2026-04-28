@@ -956,3 +956,95 @@ async def ingest_logs_clear(payload: dict[str, Any], x_admin_token: str | None =
 
     deleted = await repo.clear_ingest_logs()
     return {"status": "ok", "deleted": deleted}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# STREAM MAINTENANCE — drain pending messages stuck in PEL
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.post("/admin/stream/drain-pending")
+async def stream_drain_pending(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Reclaim and immediately re-queue messages stuck in the Redis Stream PEL.
+
+    Use this when the worker restarted after a crash and left messages in
+    the Pending Entry List that are not delivered to any active consumer.
+
+    The endpoint uses XPENDING to list pending messages and XCLAIM to move
+    them back to a virtual consumer, then writes them back to the stream
+    as new entries so the worker's '>' cursor picks them up normally.
+
+    Input:  {}
+    Output: { status, drained: int, requeued: int }
+    """
+    global redis, repo
+    assert redis is not None
+    assert repo is not None
+    _require_admin(x_admin_token)
+
+    min_idle_ms = 0  # claim ALL pending regardless of idle time
+    drained = 0
+    requeued = 0
+    errors = []
+
+    try:
+        # List all pending messages in the group
+        pending_info = await redis.xpending(settings.STREAM_KEY_RAW, settings.STREAM_GROUP)
+        total_pending = pending_info.get("pending", 0) if isinstance(pending_info, dict) else 0
+
+        if total_pending == 0:
+            return {"status": "ok", "drained": 0, "requeued": 0, "message": "No pending messages"}
+
+        # Use XAUTOCLAIM to steal all pending messages to this admin consumer
+        try:
+            result = await redis.xautoclaim(
+                name=settings.STREAM_KEY_RAW,
+                groupname=settings.STREAM_GROUP,
+                consumername="admin-drain",
+                min_idle_time=min_idle_ms,
+                start_id="0-0",
+                count=500,
+            )
+            messages = result[1] if isinstance(result, (list, tuple)) and len(result) > 1 else []
+        except Exception as e:
+            if "ERR unknown command" in str(e):
+                # Fallback for Redis < 6.2: use XPENDING + XCLAIM
+                pending_entries = await redis.xpending_range(
+                    settings.STREAM_KEY_RAW, settings.STREAM_GROUP,
+                    min="-", max="+", count=500
+                )
+                messages = []
+                for entry in pending_entries:
+                    msg_id = entry.get("message_id") or entry.get("msg_id") or ""
+                    if msg_id:
+                        claimed = await redis.xclaim(
+                            settings.STREAM_KEY_RAW, settings.STREAM_GROUP,
+                            "admin-drain", min_idle_time=min_idle_ms,
+                            message_ids=[msg_id]
+                        )
+                        messages.extend(claimed)
+            else:
+                raise
+
+        drained = len(messages)
+
+        # Re-inject each claimed message as a NEW stream entry so workers
+        # pick it up via the '>' cursor on their next read
+        for msg_id, fields in messages:
+            try:
+                await redis.xadd(settings.STREAM_KEY_RAW, fields)
+                # ACK the old entry to remove it from PEL
+                await redis.xack(settings.STREAM_KEY_RAW, settings.STREAM_GROUP, msg_id)
+                requeued += 1
+            except Exception as e:
+                errors.append(f"{msg_id}: {e}")
+
+    except Exception as exc:
+        return {"status": "error", "message": str(exc), "drained": drained, "requeued": requeued}
+
+    return {
+        "status": "ok",
+        "drained": drained,
+        "requeued": requeued,
+        "errors": errors[:10],
+        "message": f"Drained {drained} pending message(s), re-queued {requeued}",
+    }
