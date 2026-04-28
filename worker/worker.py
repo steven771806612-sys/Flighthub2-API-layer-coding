@@ -47,12 +47,18 @@ async def ensure_group(redis: Redis):
 
 
 async def run():
+    import re as _re
+    # Log masked Redis URL so it's visible in Railway deployment logs
+    masked_url = _re.sub(r"(rediss?://)([^@]+@)", r"\1***@", settings.REDIS_URL)
+    print(f"[worker] startup: REDIS_URL={masked_url}")
+    print(f"[worker] startup: STREAM_KEY={settings.STREAM_KEY_RAW} GROUP={settings.STREAM_GROUP} CONSUMER={settings.STREAM_CONSUMER}")
+
     redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
     repo = RedisRepo(redis)
 
     await ensure_group(redis)
 
-    print(f"[worker] consuming redis stream={settings.STREAM_KEY_RAW} group={settings.STREAM_GROUP} consumer={settings.STREAM_CONSUMER}")
+    print(f"[worker] ready — consuming stream={settings.STREAM_KEY_RAW} group={settings.STREAM_GROUP} consumer={settings.STREAM_CONSUMER}")
 
     while True:
         # Read one message at a time, block up to 5s

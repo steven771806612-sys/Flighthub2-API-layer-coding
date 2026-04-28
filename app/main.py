@@ -91,9 +91,13 @@ def _require_admin(x_admin_token: str | None):
 @app.on_event("startup")
 async def on_startup():
     global redis, repo, bus
+    import re as _re
+    masked_url = _re.sub(r"(rediss?://)([^@]+@)", r"\1***@", settings.REDIS_URL)
+    print(f"[api] startup: REDIS_URL={masked_url}")
     redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
     repo = RedisRepo(redis)
     bus = RedisStreamBus(redis, settings.STREAM_KEY_RAW)
+    print(f"[api] startup: Redis connected, stream={settings.STREAM_KEY_RAW}")
 
 
 @app.on_event("shutdown")
