@@ -749,7 +749,7 @@ async def debug_run(payload: dict[str, Any], x_admin_token: str | None = Header(
             if device_id:
                 device_info = await repo.get_device(device_id)
 
-        filled, missing = autofill(event, device_info, autofill_conf)
+        filled, missing = autofill(event, device_info, autofill_conf, flat_event=flat)
         final_body = build_fh2_body(filled, workflow_uuid=workflow_uuid)
         stages["final_body"] = final_body
         stages["missing"] = missing

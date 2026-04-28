@@ -166,7 +166,7 @@ async def process_message(
             if isinstance(tb, dict):
                 workflow_uuid = str(tb.get("workflow_uuid", ""))
 
-        filled, missing_fields = autofill(unified, device_info, autofill_conf)
+        filled, missing_fields = autofill(unified, device_info, autofill_conf, flat_event=flat)
         body = build_fh2_body(filled, workflow_uuid=workflow_uuid)
 
         if missing_fields:

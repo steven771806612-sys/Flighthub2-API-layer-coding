@@ -56,10 +56,34 @@ class RedisRepo:
 
     # ── Existing methods (unchanged) ──────────────────────────────────────────
 
+    # ── Default mapping — written NX when a new source is first seen ──────────
+    _DEFAULT_MAPPING: dict = {
+        "mappings": [
+            {"src": "$.timestamp",   "dst": "timestamp",   "type": "string", "default": "",       "required": False},
+            {"src": "$.creator_id",  "dst": "creator_id",  "type": "string", "default": "system", "required": True},
+            {"src": "$.latitude",    "dst": "latitude",    "type": "float",  "default": 0,        "required": False},
+            {"src": "$.longitude",   "dst": "longitude",   "type": "float",  "default": 0,        "required": False},
+            {"src": "$.level",       "dst": "level",       "type": "string", "default": "info",   "required": True},
+            {"src": "$.description", "dst": "description", "type": "string", "default": "",       "required": False},
+            {"src": "$.event.name",  "dst": "name",        "type": "string", "default": "",       "required": False},
+        ]
+    }
+
+    _DEFAULT_SRCAUTH: dict = {
+        "enabled": True,
+        "mode": "static_token",
+        "header_name": "X-MW-Token",
+        "token": "",
+    }
+
     async def get_mapping(self, source: str) -> dict:
         raw = await self.redis.get(self._k_map(source))
         if not raw:
-            return {"mappings": []}
+            # Auto-initialize new source with a sensible default mapping so
+            # common field names (creator_id, level, description, event.name)
+            # are extracted out-of-the-box without requiring manual configuration.
+            await self.redis.set(self._k_map(source), json.dumps(self._DEFAULT_MAPPING, ensure_ascii=False), nx=True)
+            return self._DEFAULT_MAPPING
         return json.loads(raw)
 
     async def set_mapping(self, source: str, mapping: dict) -> None:
@@ -77,7 +101,9 @@ class RedisRepo:
     async def get_source_auth(self, source: str) -> dict:
         raw = await self.redis.get(self._k_srcauth(source))
         if not raw:
-            return {}
+            # Auto-initialize auth config for unknown sources (token empty = open).
+            await self.redis.set(self._k_srcauth(source), json.dumps(self._DEFAULT_SRCAUTH, ensure_ascii=False), nx=True)
+            return dict(self._DEFAULT_SRCAUTH)
         return json.loads(raw)
 
     async def set_source_auth(self, source: str, cfg: dict) -> None:
