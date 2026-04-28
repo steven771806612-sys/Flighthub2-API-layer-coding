@@ -3,14 +3,16 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import {
   sourceService, authService, mappingService, egressService, debugService,
+  diagnosticService,
 } from '@/services'
+import type { DiagnosticResult } from '@/services'
 import { useSourceStore, useWizardStore } from '@/store'
 import { Card, Badge } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import {
   Zap, ArrowRight, CheckCircle, AlertCircle, XCircle, Layers,
   ChevronDown, ChevronUp, Play, Copy, CheckCheck, AlertTriangle,
-  RefreshCw, Eye,
+  RefreshCw, Eye, ShieldAlert, Activity,
 } from 'lucide-react'
 import type { StepStatus, SourcePipeline, DebugResult, FH2Body } from '@/types'
 
@@ -398,6 +400,9 @@ export function Dashboard() {
         />
       </div>
 
+      {/* ── Diagnostic panel ─────────────────────────────────────────── */}
+      <DiagnosticPanel />
+
       {/* Pipeline cards */}
       <div>
         <div className="flex items-center justify-between mb-3">
@@ -434,6 +439,100 @@ export function Dashboard() {
           ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── DiagnosticPanel ──────────────────────────────────────────────────────────
+// Shows stream backlog + fhcfg config issues detected by /admin/diagnostic.
+// This helps users immediately see why pushes are not reaching FlightHub2.
+function DiagnosticPanel() {
+  const { data, refetch, isFetching } = useQuery<DiagnosticResult>({
+    queryKey: ['diagnostic'],
+    queryFn: () => diagnosticService.run(),
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+  })
+
+  if (!data) return null
+
+  const issues = data.fhcfg_issues ?? {}
+  const hasIssues = Object.keys(issues).length > 0
+  const pending   = data.stream_pending_total ?? 0
+  const streamErr = data.stream_info_error
+
+  // If everything looks fine and no stream backlog, hide the panel
+  if (!hasIssues && pending === 0 && !streamErr) return null
+
+  return (
+    <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+          <span className="text-sm font-semibold text-amber-800">Pipeline Configuration Issues Detected</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => refetch()}
+          className="text-amber-500 hover:text-amber-700 transition-colors"
+          title="Refresh diagnostic"
+        >
+          <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
+      {/* Stream backlog warning */}
+      {pending > 0 && (
+        <div className="flex items-center gap-2 text-xs text-amber-700">
+          <Activity className="w-3.5 h-3.5 shrink-0" />
+          <span>
+            <strong>{pending}</strong> message{pending !== 1 ? 's' : ''} pending in Redis Stream
+            {' '}— Worker may not be processing messages. Check deployment logs.
+          </span>
+        </div>
+      )}
+      {streamErr && (
+        <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 font-mono">
+          Stream error: {streamErr}
+        </div>
+      )}
+
+      {/* Per-source fhcfg issues */}
+      {hasIssues && (
+        <div className="space-y-1.5">
+          {Object.entries(issues).map(([src, errs]) => (
+            <div key={src} className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs">
+              <span className="font-mono font-semibold text-gray-700">{src}</span>
+              <span className="text-amber-600 ml-2">— Egress config incomplete:</span>
+              <ul className="mt-1 space-y-0.5 pl-4 list-disc">
+                {errs.map((e) => (
+                  <li key={e} className="text-red-600">
+                    {e === 'X-User-Token_empty'            && 'X-User-Token is not set — go to Egress → save credentials'}
+                    {e === 'X-User-Token_is_placeholder'   && 'X-User-Token still has placeholder value — update in Egress panel'}
+                    {e === 'x-project-uuid_empty'          && 'x-project-uuid is not set — go to Egress → save credentials'}
+                    {e === 'x-project-uuid_is_placeholder' && 'x-project-uuid still has placeholder value — update in Egress panel'}
+                    {e === 'workflow_uuid_empty'            && 'workflow_uuid is not set — go to Egress → save credentials'}
+                    {e === 'workflow_uuid_is_placeholder'   && 'workflow_uuid still has placeholder value — update in Egress panel'}
+                    {e === 'fhcfg_missing'                 && 'No Egress config found — please configure in Egress panel'}
+                    {e === 'endpoint_empty'                 && 'FlightHub2 API endpoint is empty'}
+                    {!['X-User-Token_empty','X-User-Token_is_placeholder','x-project-uuid_empty',
+                       'x-project-uuid_is_placeholder','workflow_uuid_empty','workflow_uuid_is_placeholder',
+                       'fhcfg_missing','endpoint_empty'].includes(e) && e}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Latest log summary */}
+      {data.latest_log && (
+        <div className="text-xs text-gray-500 border-t border-amber-200 pt-2">
+          Last push: HTTP <strong>{data.latest_log.http_status}</strong>
+          {' '}— {data.latest_log.fh2_response ? `FH2: ${data.latest_log.fh2_response.slice(0, 120)}` : 'no response'}
+        </div>
+      )}
     </div>
   )
 }
