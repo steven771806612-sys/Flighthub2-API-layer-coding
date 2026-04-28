@@ -174,6 +174,9 @@ def _require_source_auth(source: str, request: Request, srcauth: dict):
 
     Current POC supports: mode=static_token.
     When auth is disabled (enabled=False), all requests are allowed through.
+    When token is empty/not configured (enabled=True but token=""), requests are
+    also allowed through — this lets the middleware work out-of-the-box before
+    the operator has set up a specific inbound token.
     """
     if not isinstance(srcauth, dict) or not srcauth:
         raise HTTPException(status_code=401, detail=f"source_not_registered_or_auth_missing: {source}")
@@ -191,7 +194,13 @@ def _require_source_auth(source: str, request: Request, srcauth: dict):
     expected = str(srcauth.get("token") or "")
     got = request.headers.get(header_name) or ""
 
-    if not expected or got != expected:
+    # If no token has been configured yet, allow the request through.
+    # This is the expected POC behaviour: the pipeline is open until the operator
+    # deliberately sets a non-empty inbound token in the Sources panel.
+    if not expected:
+        return
+
+    if got != expected:
         raise HTTPException(status_code=401, detail="auth_failed")
 
 

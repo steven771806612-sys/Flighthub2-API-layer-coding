@@ -132,6 +132,16 @@ export function SourceAuthForm({ sourceId }: { sourceId: string }) {
       title="Ingress Authentication"
       description="Only requests with the correct header token will be accepted"
     >
+      {/* Warning shown when auth is enabled but no token has been set yet */}
+      {authEnabledValue && !hasExistingToken && (
+        <div className="flex items-start gap-2 px-3 py-2 mb-4 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            <strong>No token set</strong> — the endpoint is currently open to all requests.
+            Set a token below to enforce authentication.
+          </span>
+        </div>
+      )}
       {isDirty && (
         <div className="flex items-center gap-2 px-3 py-2 mb-4 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
           <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
