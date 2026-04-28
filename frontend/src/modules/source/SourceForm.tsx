@@ -7,7 +7,7 @@ import { useDirtyGuard } from '@/hooks/useDirtyGuard'
 import { Card } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
-import { Copy, RefreshCw, Eye, EyeOff, AlertTriangle, Trash2 } from 'lucide-react'
+import { Copy, RefreshCw, Eye, EyeOff, AlertTriangle, Trash2, Check, ExternalLink } from 'lucide-react'
 import type { IngressAuth } from '@/types'
 
 // ─── Create Source ────────────────────────────────────────────────────────────
@@ -293,27 +293,87 @@ export function SourceSelector({ onDelete }: { onDelete?: (id: string) => void }
 // ─── Webhook URL display ──────────────────────────────────────────────────────
 export function WebhookURL({ sourceId }: { sourceId: string }) {
   const { addToast } = useUIStore()
-  const url = `${window.location.origin}/webhook`
+  const [urlCopied, setUrlCopied] = useState(false)
+  const [bodyCopied, setBodyCopied] = useState(false)
+
+  const url        = `${window.location.origin}/webhook`
+  const bodySnippet = JSON.stringify({ source: sourceId, webhook_event: { /* your payload */ } }, null, 2)
+
+  const copyUrl = () => {
+    navigator.clipboard.writeText(url)
+    setUrlCopied(true)
+    setTimeout(() => setUrlCopied(false), 2000)
+    addToast('info', 'URL copied!')
+  }
+  const copyBody = () => {
+    navigator.clipboard.writeText(bodySnippet)
+    setBodyCopied(true)
+    setTimeout(() => setBodyCopied(false), 2000)
+    addToast('info', 'Body template copied!')
+  }
 
   return (
-    <div className="space-y-2">
-      {/* Endpoint row */}
-      <div className="flex items-center gap-2 p-3 bg-blue-50 rounded-lg border border-blue-200">
-        <span className="text-xs font-semibold text-blue-600 shrink-0">Webhook Endpoint</span>
-        <code className="flex-1 text-xs font-mono text-blue-800 truncate">{url}</code>
-        <span className="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-mono shrink-0">POST</span>
-        <button
-          onClick={() => { navigator.clipboard.writeText(url); addToast('info', 'URL copied!') }}
-          className="text-blue-400 hover:text-blue-600 shrink-0"
-          title="Copy URL"
-        >
-          <Copy className="w-4 h-4" />
-        </button>
+    <div className="rounded-xl border-2 border-blue-300 bg-blue-50 overflow-hidden shadow-sm">
+      {/* Header bar */}
+      <div className="flex items-center gap-3 px-4 py-3 bg-blue-600">
+        <ExternalLink className="w-4 h-4 text-white shrink-0" />
+        <div className="flex-1">
+          <p className="text-white font-semibold text-sm leading-none">Webhook Ingest URL</p>
+          <p className="text-blue-200 text-xs mt-0.5">Point your third-party system to this endpoint</p>
+        </div>
+        <span className="text-xs font-mono font-bold bg-white/20 text-white px-2 py-1 rounded-full shrink-0">
+          POST
+        </span>
       </div>
-      {/* Source hint */}
-      <p className="text-xs text-gray-400 pl-1">
-        Incoming requests must include <code className="bg-gray-100 px-1 rounded">"source": "{sourceId}"</code> in the body
-      </p>
+
+      <div className="p-4 space-y-4">
+        {/* ── Full URL row ── */}
+        <div>
+          <p className="text-xs font-semibold text-blue-700 mb-1.5 uppercase tracking-wide">Endpoint</p>
+          <div className="flex items-center gap-2 bg-white border border-blue-200 rounded-lg px-3 py-2.5 shadow-sm">
+            <code className="flex-1 text-sm font-mono text-blue-900 break-all select-all">{url}</code>
+            <button
+              onClick={copyUrl}
+              className="shrink-0 flex items-center gap-1 text-xs text-blue-500 hover:text-blue-700 font-medium transition-colors px-2 py-1 rounded-md hover:bg-blue-50"
+              title="Copy URL"
+            >
+              {urlCopied
+                ? <><Check className="w-3.5 h-3.5 text-green-500" /><span className="text-green-600">Copied</span></>
+                : <><Copy  className="w-3.5 h-3.5" /><span>Copy</span></>}
+            </button>
+          </div>
+        </div>
+
+        {/* ── Required body fields ── */}
+        <div>
+          <p className="text-xs font-semibold text-blue-700 mb-1.5 uppercase tracking-wide">
+            Required Request Body (JSON)
+          </p>
+          <div className="bg-gray-900 rounded-lg overflow-hidden border border-gray-700">
+            <div className="flex items-center justify-between px-3 py-1.5 bg-gray-800 border-b border-gray-700">
+              <span className="text-xs text-gray-400 font-mono">application/json</span>
+              <button
+                onClick={copyBody}
+                className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+                title="Copy body template"
+              >
+                {bodyCopied
+                  ? <><Check className="w-3 h-3 text-green-400" /><span className="text-green-400">Copied</span></>
+                  : <><Copy  className="w-3 h-3" /><span>Copy</span></>}
+              </button>
+            </div>
+            <pre className="text-xs font-mono px-3 py-3 text-gray-200 overflow-x-auto">
+<span className="text-gray-500">{'{'}</span>
+{`\n`}  <span className="text-blue-300">"source"</span>: <span className="text-amber-300">"{sourceId}"</span>,       <span className="text-gray-500">// required — identifies this source</span>
+{`\n`}  <span className="text-blue-300">"webhook_event"</span>: <span className="text-gray-500">{'{ ... }'}</span>    <span className="text-gray-500">// required — your raw payload (any JSON)</span>
+{`\n`}<span className="text-gray-500">{'}'}</span>
+            </pre>
+          </div>
+          <p className="text-xs text-blue-600 mt-1.5 pl-0.5">
+            Both fields are required. <code className="bg-blue-100 px-1 rounded font-mono">webhook_event</code> can be any JSON object — the mapping rules will transform it.
+          </p>
+        </div>
+      </div>
     </div>
   )
 }

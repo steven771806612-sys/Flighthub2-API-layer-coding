@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Layers, ArrowRightLeft, Settings, Zap, Cpu, ChevronDown, ScrollText } from 'lucide-react'
+import { LayoutDashboard, Layers, ArrowRightLeft, Settings, Zap, Cpu, ChevronDown, ScrollText, Copy, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
@@ -172,11 +172,53 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* Footer */}
-      <div className="px-4 py-3 border-t border-gray-800 text-xs text-gray-500">
-        v0.5 · DJI FlightHub2
-        <div className="mt-1 font-mono break-all text-gray-600 text-[10px]">POST /webhook</div>
-      </div>
+      {/* Footer — Webhook endpoint URL (most important info for third parties) */}
+      <WebhookEndpointFooter />
     </aside>
+  )
+}
+
+// ─── Webhook URL footer — always visible so operators can quickly copy it ──────
+function WebhookEndpointFooter() {
+  const [copied, setCopied] = useState(false)
+  const url = typeof window !== 'undefined' ? `${window.location.origin}/webhook` : '/webhook'
+
+  const copy = () => {
+    navigator.clipboard.writeText(url).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  return (
+    <div className="px-3 py-3 border-t border-gray-800 space-y-1.5">
+      {/* Label */}
+      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 px-1">
+        Webhook Ingest URL
+      </p>
+
+      {/* URL box — click copy button to copy the full URL */}
+      <div className="flex items-center gap-1.5 bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5">
+        <span className="text-[9px] font-mono text-amber-400 shrink-0 select-none bg-amber-900/30 px-1 py-0.5 rounded">POST</span>
+        <code
+          className="flex-1 text-[10px] font-mono text-green-400 truncate leading-tight"
+          title={url}
+        >
+          {url}
+        </code>
+        <button
+          onClick={copy}
+          className="shrink-0 text-gray-600 hover:text-gray-300 transition-colors"
+          title="Copy webhook URL"
+        >
+          {copied
+            ? <Check className="w-3 h-3 text-green-400" />
+            : <Copy  className="w-3 h-3" />}
+        </button>
+      </div>
+
+      {/* Version */}
+      <p className="text-[10px] text-gray-600 px-1">v0.5 · DJI FlightHub2</p>
+    </div>
   )
 }
