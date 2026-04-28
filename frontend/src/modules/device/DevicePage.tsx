@@ -130,7 +130,8 @@ export default function DevicePage() {
 
       <Card
         title="Device Registry"
-        description="存储为 uw:device:{value}，其中 value 为 payload 中 Device ID Field 字段的实际内容"
+
+        description="Stored as uw:device:{value}, where 'value' is the actual content of the Device ID Field in the payload"
         actions={
           <Button variant="secondary" size="sm" onClick={addRow}>
             <Plus className="w-3.5 h-3.5" /> Add Device
@@ -138,7 +139,7 @@ export default function DevicePage() {
         }
       >
         <div className="grid grid-cols-[2fr_2fr_1.2fr_1.2fr_auto] gap-3 mb-2 px-1">
-          {['Device ID 字段值 *', '备注 (Model)', 'Latitude', 'Longitude', ''].map((h) => (
+          {['Device ID Field Value *', 'Note (Model)', 'Latitude', 'Longitude', ''].map((h) => (
             <span key={h} className="text-xs font-medium text-gray-500">{h}</span>
           ))}
         </div>
@@ -161,7 +162,7 @@ export default function DevicePage() {
                     disabled={!row._isNew}
                   />
                   <Input
-                    placeholder="备注（可选）"
+                    placeholder="Note (optional)"
                     value={row.model ?? ''}
                     onChange={(e) => updateRow(i, 'model', e.target.value)}
                   />
@@ -241,7 +242,7 @@ export default function DevicePage() {
             <MapPin className="w-4 h-4 text-teal-600 mt-0.5 shrink-0" />
             <div>
               <p className="font-medium text-gray-700 mb-1">Step 2 — Registry Lookup (this page)</p>
-              <p>The resolved device ID value is matched against the <strong>Device ID 字段值</strong> column above.
+              <p>The resolved device ID value is matched against the <strong>Device ID Field Value</strong> column above.
                 If found, coordinates are injected into the FH2 body:</p>
               <pre className="text-xs font-mono bg-gray-900 text-emerald-400 p-2 rounded mt-2">{`params.latitude  = device.location.lat\nparams.longitude = device.location.lng`}</pre>
             </div>

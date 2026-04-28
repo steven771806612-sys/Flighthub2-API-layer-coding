@@ -133,6 +133,36 @@ export const deviceIdFieldService = {
   },
 }
 
+// ─── Processing Logs ─────────────────────────────────────────────────────────
+
+export interface ProcessingLog {
+  ts: number
+  source: string
+  msg_id: string
+  http_status: number
+  fh2_response: string
+  body_name: string
+  workflow_uuid: string
+  missing_fields: string[]
+  ok: boolean
+}
+
+export const logService = {
+  async get(sourceId?: string, limit = 100): Promise<ProcessingLog[]> {
+    const { data } = await apiClient.post('/admin/logs/get', {
+      ...(sourceId ? { source: sourceId } : {}),
+      limit,
+    })
+    return (data.logs ?? []) as ProcessingLog[]
+  },
+
+  async clear(sourceId?: string): Promise<void> {
+    await apiClient.post('/admin/logs/clear', {
+      ...(sourceId ? { source: sourceId } : {}),
+    })
+  },
+}
+
 // ─── Integration test ─────────────────────────────────────────────────────────
 
 export interface TestPayload {
