@@ -230,6 +230,14 @@ export const diagnosticService = {
   },
 }
 
+export const streamService = {
+  /** Reclaim messages stuck in the Redis Stream PEL and re-queue them for processing. */
+  async drainPending(): Promise<{ status: string; drained: number; requeued: number; message: string }> {
+    const { data } = await apiClient.post('/admin/stream/drain-pending', {})
+    return data
+  },
+}
+
 // ─── Ingest Access Logs ───────────────────────────────────────────────────────
 // Records every HTTP request that arrives at POST /webhook,
 // including rejected ones (auth failures, missing source, bad payload).
