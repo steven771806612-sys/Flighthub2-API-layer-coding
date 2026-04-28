@@ -2,9 +2,9 @@ import os
 from pydantic_settings import BaseSettings
 
 def _resolve_redis_url() -> str:
-    """Railway 可能注入多种变量名，按优先级探测。"""
+    """Railway 可能注入多种变量名，按优先级探测。跳过空字符串。"""
     for key in ("REDIS_URL", "REDIS_PRIVATE_URL", "REDIS_PUBLIC_URL", "REDISURL", "REDIS_TLS_URL"):
-        val = os.environ.get(key)
+        val = (os.environ.get(key) or "").strip()
         if val:
             return val
     return "redis://127.0.0.1:6379/0"

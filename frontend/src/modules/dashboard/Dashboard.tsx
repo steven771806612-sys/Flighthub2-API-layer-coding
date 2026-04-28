@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/Button'
 import {
   Zap, ArrowRight, CheckCircle, AlertCircle, XCircle, Layers,
   ChevronDown, ChevronUp, Play, Copy, CheckCheck, AlertTriangle,
-  RefreshCw, Eye, ShieldAlert, Activity,
+  RefreshCw, Eye, ShieldAlert,
 } from 'lucide-react'
 import type { StepStatus, SourcePipeline, DebugResult, FH2Body } from '@/types'
 
@@ -444,8 +444,7 @@ export function Dashboard() {
 }
 
 // ─── DiagnosticPanel ──────────────────────────────────────────────────────────
-// Shows stream backlog + fhcfg config issues detected by /admin/diagnostic.
-// This helps users immediately see why pushes are not reaching FlightHub2.
+// Always shown — displays Redis connection, stream backlog, and config issues.
 function DiagnosticPanel() {
   const { data, refetch, isFetching } = useQuery<DiagnosticResult>({
     queryKey: ['diagnostic'],
@@ -456,48 +455,81 @@ function DiagnosticPanel() {
 
   if (!data) return null
 
-  const issues = data.fhcfg_issues ?? {}
-  const hasIssues = Object.keys(issues).length > 0
-  const pending   = data.stream_pending_total ?? 0
-  const streamErr = data.stream_info_error
+  const issues     = data.fhcfg_issues ?? {}
+  const hasIssues  = Object.keys(issues).length > 0
+  const pending    = data.stream_pending_total ?? 0
+  const streamErr  = data.stream_info_error
+  const redisUrl   = (data as any).redis_url_in_use as string | undefined
+  const isFallback = redisUrl?.includes('127.0.0.1') || redisUrl?.includes('localhost')
+  const groups     = (data as any).consumer_groups as Array<{ name: string; pending: number; consumers: number }> | undefined
 
-  // If everything looks fine and no stream backlog, hide the panel
-  if (!hasIssues && pending === 0 && !streamErr) return null
+  const hasWarning = hasIssues || pending > 0 || streamErr || isFallback
 
   return (
-    <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3">
+    <div className={`rounded-xl border p-4 space-y-3 ${hasWarning ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-gray-50'}`}>
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
-          <span className="text-sm font-semibold text-amber-800">Pipeline Configuration Issues Detected</span>
+          <ShieldAlert className={`w-4 h-4 shrink-0 ${hasWarning ? 'text-amber-600' : 'text-gray-400'}`} />
+          <span className={`text-sm font-semibold ${hasWarning ? 'text-amber-800' : 'text-gray-600'}`}>
+            Pipeline Diagnostics
+          </span>
         </div>
         <button
           type="button"
           onClick={() => refetch()}
-          className="text-amber-500 hover:text-amber-700 transition-colors"
+          className="text-gray-400 hover:text-gray-600 transition-colors"
           title="Refresh diagnostic"
         >
           <RefreshCw className={`w-4 h-4 ${isFetching ? 'animate-spin' : ''}`} />
         </button>
       </div>
 
-      {/* Stream backlog warning */}
-      {pending > 0 && (
-        <div className="flex items-center gap-2 text-xs text-amber-700">
-          <Activity className="w-3.5 h-3.5 shrink-0" />
-          <span>
-            <strong>{pending}</strong> message{pending !== 1 ? 's' : ''} pending in Redis Stream
-            {' '}— Worker may not be processing messages. Check deployment logs.
-          </span>
+      {/* ── Redis URL currently in use ── */}
+      <div className={`rounded-lg border px-3 py-2 ${isFallback ? 'border-red-300 bg-red-50' : 'border-green-200 bg-green-50'}`}>
+        <p className={`text-xs font-semibold mb-0.5 ${isFallback ? 'text-red-700' : 'text-green-700'}`}>
+          {isFallback ? '⚠ Redis Connection' : '✓ Redis Connection'}
+        </p>
+        <code className={`text-xs font-mono break-all ${isFallback ? 'text-red-800' : 'text-green-800'}`}>
+          {redisUrl || '—'}
+        </code>
+        {isFallback && (
+          <p className="text-xs text-red-600 mt-1">
+            Worker is using <strong>localhost Redis</strong> — Railway's REDIS_URL was not forwarded to the worker process.
+            This means accepted webhooks are queued but <strong>never processed</strong>.
+            Re-deploy after this fix to resolve.
+          </p>
+        )}
+      </div>
+
+      {/* ── Stream backlog ── */}
+      {(pending > 0 || groups) && (
+        <div className={`rounded-lg border px-3 py-2 text-xs space-y-1 ${pending > 0 ? 'border-red-300 bg-red-50' : 'border-gray-200 bg-white'}`}>
+          <p className={`font-semibold ${pending > 0 ? 'text-red-700' : 'text-gray-600'}`}>
+            Redis Stream — {pending > 0 ? `${pending} message(s) pending (not yet processed)` : 'no backlog ✓'}
+          </p>
+          {groups?.map(g => (
+            <div key={g.name} className="flex gap-4 text-gray-500 font-mono pl-1">
+              <span>group: <span className="text-gray-700">{g.name}</span></span>
+              <span>pending: <span className={g.pending > 0 ? 'text-red-600 font-bold' : 'text-gray-700'}>{g.pending}</span></span>
+              <span>consumers: <span className="text-gray-700">{g.consumers}</span></span>
+            </div>
+          ))}
+          {pending > 0 && (
+            <p className="text-red-600 pt-0.5">
+              Messages are stuck — worker cannot consume them (likely wrong Redis URL). Re-deploy to fix.
+            </p>
+          )}
         </div>
       )}
+
       {streamErr && (
         <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 font-mono">
           Stream error: {streamErr}
         </div>
       )}
 
-      {/* Per-source fhcfg issues */}
+      {/* ── Per-source fhcfg issues ── */}
       {hasIssues && (
         <div className="space-y-1.5">
           {Object.entries(issues).map(([src, errs]) => (
@@ -505,15 +537,15 @@ function DiagnosticPanel() {
               <span className="font-mono font-semibold text-gray-700">{src}</span>
               <span className="text-amber-600 ml-2">— Egress config incomplete:</span>
               <ul className="mt-1 space-y-0.5 pl-4 list-disc">
-                {errs.map((e) => (
+                {(errs as string[]).map((e: string) => (
                   <li key={e} className="text-red-600">
-                    {e === 'X-User-Token_empty'            && 'X-User-Token is not set — go to Egress → save credentials'}
-                    {e === 'X-User-Token_is_placeholder'   && 'X-User-Token still has placeholder value — update in Egress panel'}
-                    {e === 'x-project-uuid_empty'          && 'x-project-uuid is not set — go to Egress → save credentials'}
-                    {e === 'x-project-uuid_is_placeholder' && 'x-project-uuid still has placeholder value — update in Egress panel'}
-                    {e === 'workflow_uuid_empty'            && 'workflow_uuid is not set — go to Egress → save credentials'}
-                    {e === 'workflow_uuid_is_placeholder'   && 'workflow_uuid still has placeholder value — update in Egress panel'}
-                    {e === 'fhcfg_missing'                 && 'No Egress config found — please configure in Egress panel'}
+                    {e === 'X-User-Token_empty'            && 'X-User-Token not set — go to Egress → save credentials'}
+                    {e === 'X-User-Token_is_placeholder'   && 'X-User-Token is still placeholder — update in Egress panel'}
+                    {e === 'x-project-uuid_empty'          && 'x-project-uuid not set — go to Egress → save credentials'}
+                    {e === 'x-project-uuid_is_placeholder' && 'x-project-uuid is still placeholder — update in Egress panel'}
+                    {e === 'workflow_uuid_empty'            && 'workflow_uuid not set — go to Egress → save credentials'}
+                    {e === 'workflow_uuid_is_placeholder'   && 'workflow_uuid is still placeholder — update in Egress panel'}
+                    {e === 'fhcfg_missing'                 && 'No Egress config found — configure in Egress panel'}
                     {e === 'endpoint_empty'                 && 'FlightHub2 API endpoint is empty'}
                     {!['X-User-Token_empty','X-User-Token_is_placeholder','x-project-uuid_empty',
                        'x-project-uuid_is_placeholder','workflow_uuid_empty','workflow_uuid_is_placeholder',
@@ -526,12 +558,19 @@ function DiagnosticPanel() {
         </div>
       )}
 
-      {/* Latest log summary */}
+      {/* ── Latest push result ── */}
       {data.latest_log && (
-        <div className="text-xs text-gray-500 border-t border-amber-200 pt-2">
+        <div className="text-xs text-gray-500 border-t border-gray-200 pt-2">
           Last push: HTTP <strong>{data.latest_log.http_status}</strong>
-          {' '}— {data.latest_log.fh2_response ? `FH2: ${data.latest_log.fh2_response.slice(0, 120)}` : 'no response'}
+          {' '}— {data.latest_log.fh2_response
+            ? `FH2: ${(data.latest_log.fh2_response as string).slice(0, 120)}`
+            : 'no response'}
         </div>
+      )}
+
+      {/* All good */}
+      {!hasWarning && !data.latest_log && (
+        <p className="text-xs text-gray-400 text-center">No issues detected</p>
       )}
     </div>
   )

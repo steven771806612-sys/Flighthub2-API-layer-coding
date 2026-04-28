@@ -217,6 +217,8 @@ export interface DiagnosticResult {
     missing: string[]
     fh2_response: string
   }
+  // Redis URL actually in use by the API process (masked password)
+  redis_url_in_use?: string
 }
 
 export const diagnosticService = {
