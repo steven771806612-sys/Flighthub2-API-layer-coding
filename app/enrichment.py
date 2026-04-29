@@ -87,16 +87,37 @@ async def enrich(event: dict, repo: RedisRepo, device_key: str = "device_id") ->
     # Inject raw device info under _device namespace
     event["_device"] = device_info
 
-    # Convenience: lift "location" to top level if present and not already set
-    if "location" not in event and "location" in device_info:
-        event["location"] = device_info["location"]
+    # Convenience: lift "location" to top level.
+    # build_event() always writes location:{lat:None, lng:None, alt:None} as a
+    # placeholder so downstream stages can rely on the key existing.  We must
+    # OVERWRITE that placeholder when the device registry supplies real coords —
+    # not skip it because the key "already exists".
+    # Rule: overwrite if the existing location has no real lat/lng (all None/0).
+    dev_loc = device_info.get("location")
+    if isinstance(dev_loc, dict) and any(
+        v is not None and v != 0.0 for v in dev_loc.values()
+    ):
+        existing_loc = event.get("location") or {}
+        existing_has_real = isinstance(existing_loc, dict) and any(
+            v is not None and v != 0.0
+            for v in (existing_loc.get("lat"), existing_loc.get("lng"))
+        )
+        if not existing_has_real:
+            # No real coords from payload — inject device registry location
+            event["location"] = dev_loc
+            logger.debug(
+                "[enrichment] injected device location for device_id=%s loc=%s",
+                device_id, dev_loc,
+            )
 
-    # Convenience: inject individual lat/lng/alt if not already mapped
+    # Convenience: inject individual lat/lng/alt at top level if not already set
+    # (autofill also reads these top-level keys as coord aliases)
     loc = device_info.get("location") or {}
     if isinstance(loc, dict):
         for field in ("lat", "lng", "alt"):
-            if field not in event and field in loc:
-                event[field] = loc[field]
+            if field in loc and loc[field] is not None and loc[field] != 0.0:
+                if not event.get(field):
+                    event[field] = loc[field]
 
     logger.debug(
         "[enrichment] enriched event with device_id=%s fields=%s",
