@@ -216,6 +216,7 @@ function ProcessingRow({ log }: { log: ProcessingLog }) {
   const [open, setOpen] = useState(false)
   const hasMissing  = log.missing_fields?.length > 0
   const hasResponse = !!log.fh2_response
+  const hasDiag     = !!log.diag
 
   return (
     <div className={`border rounded-lg overflow-hidden ${log.ok ? 'border-gray-200' : 'border-red-200'}`}>
@@ -252,7 +253,7 @@ function ProcessingRow({ log }: { log: ProcessingLog }) {
           </span>
         )}
 
-        {(hasResponse || hasMissing) && (
+        {(hasResponse || hasMissing || hasDiag) && (
           open
             ? <ChevronDown  className="w-3.5 h-3.5 text-gray-400 shrink-0" />
             : <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />
@@ -278,12 +279,107 @@ function ProcessingRow({ log }: { log: ProcessingLog }) {
             </div>
           )}
 
+          {/* ── GPS Injection Diagnostic — shown when lat/lng are missing ── */}
+          {hasMissing && (log.missing_fields.includes('params.latitude') || log.missing_fields.includes('params.longitude')) && (
+            <div className="border border-orange-200 rounded-lg bg-orange-50 px-3 py-2.5 space-y-1.5">
+              <p className="text-xs font-bold text-orange-800 flex items-center gap-1.5 mb-2">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                GPS Injection Diagnostic — why are coordinates missing?
+              </p>
+
+              {/* Device ID Field */}
+              <div className="flex items-start gap-2 text-xs">
+                <span className="text-orange-600 font-medium w-36 shrink-0 pt-0.5">Device ID field:</span>
+                {log.device_id_field
+                  ? <code className="bg-white border border-orange-200 px-1.5 py-0.5 rounded text-orange-900 font-mono">{log.device_id_field}</code>
+                  : <span className="text-red-700 font-semibold">
+                      ⚠ Not configured — go to <strong>Device → Device ID Field</strong> and set it (e.g. <code className="bg-red-100 px-1 rounded font-mono">creator_id</code>)
+                    </span>
+                }
+              </div>
+
+              {/* Resolved device_id */}
+              <div className="flex items-start gap-2 text-xs">
+                <span className="text-orange-600 font-medium w-36 shrink-0 pt-0.5">Resolved device_id:</span>
+                {log.device_id
+                  ? <code className="bg-white border border-orange-200 px-1.5 py-0.5 rounded text-orange-900 font-mono">{log.device_id}</code>
+                  : <span className="text-red-700 font-semibold">
+                      ⚠ Empty — payload field is absent or Device ID Field not configured
+                    </span>
+                }
+              </div>
+
+              {/* Device record found */}
+              <div className="flex items-start gap-2 text-xs">
+                <span className="text-orange-600 font-medium w-36 shrink-0 pt-0.5">Device record:</span>
+                {log.device_id && log.device_found === false
+                  ? <span className="text-red-700 font-semibold">
+                      ⚠ Not found — add device <code className="bg-red-100 px-1 rounded font-mono">{log.device_id}</code> with lat/lng via <strong>Device page</strong>
+                    </span>
+                  : log.device_found
+                    ? <span className="text-emerald-700 font-medium">✓ Found in registry</span>
+                    : <span className="text-gray-400 italic">unknown (upgrade worker to see this)</span>
+                }
+              </div>
+
+              {/* GPS in device record */}
+              <div className="flex items-start gap-2 text-xs">
+                <span className="text-orange-600 font-medium w-36 shrink-0 pt-0.5">Device has GPS:</span>
+                {log.device_found && log.device_has_gps === false
+                  ? <span className="text-red-700 font-semibold">
+                      ⚠ Device found but lat/lng are empty — edit device and add coordinates
+                    </span>
+                  : log.device_has_gps
+                    ? <span className="text-emerald-700 font-medium">✓ GPS available → injection should work</span>
+                    : <span className="text-gray-400 italic">—</span>
+                }
+              </div>
+
+              {/* Contextual action hint */}
+              {!log.device_id_field && (
+                <p className="text-xs text-orange-800 bg-orange-100 border border-orange-200 rounded px-2 py-1.5 mt-1">
+                  <strong>Fix:</strong> Console → select source <code className="bg-orange-200 px-1 rounded">{log.source}</code> → Device → Device ID Field → set to the payload field that identifies the camera (e.g. <code className="bg-orange-200 px-1 rounded">creator_id</code>)
+                </p>
+              )}
+              {log.device_id_field && log.device_id && log.device_found === false && (
+                <p className="text-xs text-orange-800 bg-orange-100 border border-orange-200 rounded px-2 py-1.5 mt-1">
+                  <strong>Fix:</strong> Console → Device → Add Device with ID = <code className="bg-orange-200 px-1 rounded">{log.device_id}</code> → set latitude &amp; longitude
+                </p>
+              )}
+              {log.device_found && log.device_has_gps === false && (
+                <p className="text-xs text-orange-800 bg-orange-100 border border-orange-200 rounded px-2 py-1.5 mt-1">
+                  <strong>Fix:</strong> Console → Device → edit <code className="bg-orange-200 px-1 rounded">{log.device_id}</code> → set latitude &amp; longitude
+                </p>
+              )}
+            </div>
+          )}
+
           {hasResponse && (
             <div>
               <p className="text-xs text-gray-500 mb-1 font-semibold">FlightHub2 Response:</p>
               <pre className="text-xs font-mono bg-gray-900 text-gray-200 rounded-lg px-3 py-2 overflow-x-auto max-h-48 whitespace-pre-wrap break-all">
                 {log.fh2_response}
               </pre>
+            </div>
+          )}
+
+          {/* ── Pipeline Diagnostic Trace ── */}
+          {hasDiag && (
+            <div>
+              <p className="text-xs text-gray-500 mb-1 font-semibold">Pipeline Trace:</p>
+              <div className="text-xs font-mono bg-gray-900 text-gray-300 rounded-lg px-3 py-2 space-y-0.5 overflow-x-auto max-h-40">
+                {log.diag!.split(' | ').map((step, i) => (
+                  <div key={i} className="whitespace-pre-wrap break-all">
+                    <span className="text-gray-500 select-none">{i + 1}. </span>
+                    <span className={
+                      step.includes('lat=25') || step.includes('lng=55') || step.includes('RESOLVED') ? 'text-emerald-400' :
+                      step.includes('0.0') || step.includes('None') || step.includes('missing') ? 'text-amber-400' :
+                      step.includes('ERROR') || step.includes('crash') ? 'text-red-400' :
+                      'text-gray-300'
+                    }>{step}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

@@ -986,6 +986,173 @@ async def diagnostic(payload: dict[str, Any], x_admin_token: str | None = Header
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# SOURCE INSPECT  — shows exactly what Redis holds for a source,
+# simulates the coord-injection pipeline and explains why coords may be 0.
+# ════════════════════════════════════════════════════════════════════════════
+
+@app.post("/admin/source/inspect")
+async def source_inspect(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Full source configuration inspection — reveals why coords may be missing.
+
+    Input:  { source: str, sample_payload?: dict }
+    Output: {
+        source_config: { mapping_stale, mapping_has_rules, device_id_field, ... },
+        device_check:  { device_id_field, device_id_resolved, device_found, device_has_gps, device_location },
+        coord_diagnosis: { root_cause, fix_required },
+        simulation?: { missing, lat, lng, name, creator }
+    }
+    """
+    global repo
+    assert repo is not None
+    _require_admin(x_admin_token)
+
+    from app.flatten import flatten_json
+    from app.mapping_engine import apply_mappings
+    from app.canonical import build_event
+    from app.autofill import autofill, build_fh2_body
+    import time as _t
+
+    source: str = (payload.get("source") or "").strip()
+    if not source:
+        return {"status": "error", "message": "missing source"}
+
+    sample: dict = payload.get("sample_payload") or {}
+    result: dict[str, Any] = {"source": source}
+
+    # ── 1. Mapping config ─────────────────────────────────────────────────────
+    raw_map = await repo.redis.get(repo._k_map(source))
+    if raw_map:
+        import json as _j
+        stored_map = _j.loads(raw_map)
+    else:
+        stored_map = None
+
+    mapping_conf = await repo.get_mapping(source)   # auto-upgrades if needed
+    mapping_rules = mapping_conf.get("mappings", [])
+
+    stale_coord_rules = [
+        r for r in mapping_rules
+        if r.get("dst") in ("latitude", "longitude") and (r.get("default") == 0 or r.get("default") == 0.0)
+    ]
+
+    result["source_config"] = {
+        "mapping_exists_in_redis": stored_map is not None,
+        "mapping_has_rules": len(mapping_rules) > 0,
+        "mapping_stale_coord_defaults": len(stale_coord_rules) > 0,
+        "stale_rules": stale_coord_rules,
+        "mapping_rule_count": len(mapping_rules),
+    }
+
+    # ── 2. Device ID Field ────────────────────────────────────────────────────
+    device_id_field = await repo.get_device_id_field(source)
+    result["device_config"] = {
+        "device_id_field_configured": bool(device_id_field),
+        "device_id_field_value": device_id_field or "(not set — using default 'device_id')",
+    }
+
+    # ── 3. Simulate device_id resolution from sample payload ──────────────────
+    device_id_resolved = ""
+    flat_sample: dict = {}
+    if sample:
+        flat_sample = flatten_json(sample)
+        mapped_sample = apply_mappings(sample, source, mapping_conf, int(_t.time()), flat_event=flat_sample)
+        canonical_sample = build_event(mapped_sample, sample, source)
+        device_id_resolved = canonical_sample.get("device_id") or ""
+        if isinstance(canonical_sample.get("device"), dict):
+            device_id_resolved = device_id_resolved or canonical_sample["device"].get("id", "")
+        if not device_id_resolved and device_id_field:
+            device_id_resolved = str(
+                canonical_sample.get(device_id_field) or flat_sample.get(device_id_field) or ""
+            )
+
+    # ── 4. Device record lookup ───────────────────────────────────────────────
+    device_info: dict = {}
+    if device_id_resolved:
+        device_info = await repo.get_device(device_id_resolved)
+
+    device_has_gps = bool(
+        isinstance(device_info.get("location"), dict) and
+        any(v for v in device_info["location"].values() if v and v != 0.0)
+    )
+
+    result["device_check"] = {
+        "device_id_resolved": device_id_resolved or "(empty — device_id_field not set or field absent from payload)",
+        "device_found": bool(device_info),
+        "device_has_gps": device_has_gps,
+        "device_location": device_info.get("location") if device_info else None,
+        "device_record": device_info or None,
+    }
+
+    # ── 5. Root-cause diagnosis ───────────────────────────────────────────────
+    root_causes: list[str] = []
+    fixes: list[str] = []
+
+    if stale_coord_rules:
+        root_causes.append("Mapping has lat/lng rules with default:0 — these inject 0.0 and block device GPS")
+        fixes.append("Click 'Reset to Defaults' on the Mapping page, or call POST /admin/mapping/migrate")
+
+    if not device_id_field:
+        root_causes.append("Device ID Field not configured for this source — worker cannot resolve device_id from payload")
+        # Give a source-specific hint so operators know exactly what to type
+        _field_hint = "channelName" if source == "hikvision" else "creator_id"
+        fixes.append(
+            f"Set Device ID Field for source '{source}' to '{_field_hint}' "
+            f"via Console → Device → Device ID Field  "
+            f"(Hikvision cameras use 'channelName'; generic sources use 'creator_id')"
+        )
+
+    if device_id_field and not device_id_resolved:
+        root_causes.append(f"Device ID Field is '{device_id_field}' but that field is absent from sample payload")
+        fixes.append(f"Verify the Hikvision payload contains field '{device_id_field}'")
+
+    if device_id_field and device_id_resolved and not device_info:
+        root_causes.append(f"Device ID Field resolves to '{device_id_resolved}' but no device record found in Redis (uw:device:{device_id_resolved})")
+        fixes.append(f"Add device '{device_id_resolved}' with lat/lng via Console → Device → Add Device")
+
+    if device_info and not device_has_gps:
+        root_causes.append(f"Device record found for '{device_id_resolved}' but location has no real GPS coordinates")
+        fixes.append(f"Edit device '{device_id_resolved}' and set latitude + longitude")
+
+    if not root_causes:
+        root_causes.append("No obvious config issues detected — GPS injection should work")
+
+    result["coord_diagnosis"] = {
+        "root_causes": root_causes,
+        "fixes_required": fixes,
+        "coord_injection_will_work": device_has_gps and not stale_coord_rules,
+    }
+
+    # ── 6. Pipeline simulation (if sample payload provided) ───────────────────
+    if sample and device_id_resolved:
+        try:
+            mapped_s = apply_mappings(sample, source, mapping_conf, int(_t.time()), flat_event=flat_sample)
+            canonical_s = build_event(mapped_s, sample, source)
+            if device_id_resolved:
+                canonical_s["device_id"] = device_id_resolved
+                canonical_s["device"] = {"id": device_id_resolved}
+            if device_has_gps:
+                canonical_s["location"] = device_info["location"]
+            fhcfg = await repo.get_fhcfg(source)
+            autofill_conf = fhcfg.get("autofill", {}) if isinstance(fhcfg, dict) else {}
+            tb = fhcfg.get("template_body", {}) if isinstance(fhcfg, dict) else {}
+            wf_uuid = str(tb.get("workflow_uuid", "")) if isinstance(tb, dict) else ""
+            filled_s, missing_s = autofill(canonical_s, device_info, autofill_conf, flat_event=flat_sample)
+            body_s = build_fh2_body(filled_s, workflow_uuid=wf_uuid)
+            result["simulation"] = {
+                "missing_fields": missing_s,
+                "lat": body_s["params"]["latitude"],
+                "lng": body_s["params"]["longitude"],
+                "name": body_s.get("name"),
+                "creator": body_s["params"].get("creator"),
+                "full_body": body_s,
+            }
+        except Exception as sim_exc:
+            result["simulation"] = {"error": str(sim_exc)}
+
+    return {"status": "ok", **result}
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # INGEST LOGS  — per-request access log for POST /webhook
 # Captures every inbound HTTP request (accepted + rejected) with reason
 # ════════════════════════════════════════════════════════════════════════════

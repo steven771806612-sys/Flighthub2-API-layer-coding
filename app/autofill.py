@@ -94,11 +94,21 @@ _FH2_TOP: list[tuple[str, type, Any]] = [
 
 # ─── Flat-event fallback keys ──────────────────────────────────────────────────
 _FLAT_FALLBACK: dict[str, list[str]] = {
-    "params.creator":   ["creator_id", "creator", "operator_id", "operator", "user_id"],
+    # Generic fields first, then device/camera identifier fields that third-party
+    # systems (e.g. Hikvision) use in place of a generic "creator_id":
+    #   Hikvision  → channelName  (e.g. "DXB-Camera-1")
+    #   Generic NVR/IoT → deviceName, device_name, camera_name, camera_id
+    #   Last-resort → ipAddress (unique per device even without a friendly name)
+    "params.creator":   [
+        "creator_id", "creator", "operator_id", "operator", "user_id",
+        "channelName", "deviceName", "device_name", "camera_name",
+        "camera_id", "device_id", "ipAddress",
+    ],
     "params.latitude":  ["latitude", "lat", "location.lat", "gps.lat", "position.lat"],
     "params.longitude": ["longitude", "lng", "lon", "location.lng", "gps.lng", "position.lng"],
     "params.level":     ["level", "severity", "priority", "alert_level", "event_level"],
-    "params.desc":      ["description", "desc", "message", "msg", "content", "detail"],
+    "params.desc":      ["description", "desc", "message", "msg", "content", "detail",
+                         "eventState", "eventType"],
     "name":             ["name", "event_name", "event.name", "event.type",
                          "eventName", "eventType", "alert_name", "title"],
 }
@@ -185,9 +195,13 @@ def autofill(
     if isinstance(di_loc, dict):
         dev_loc.update({k: v for k, v in di_loc.items() if v is not None and v != 0.0})
 
-    # Alias lookup for non-coord fields
+    # Alias lookup for non-coord fields (checked in the unified/mapped dict)
+    # device_id is included for params.creator so that when the worker resolves
+    # device_id from e.g. channelName="DXB-Camera-1", that value flows through
+    # as the FH2 creator without any extra mapping rule.
     _mapped_aliases: dict[str, list[str]] = {
-        "params.creator":   ["params.creator", "creator_id", "creator", "operator"],
+        "params.creator":   ["params.creator", "creator_id", "creator", "operator",
+                             "device_id", "channelName"],
         "params.level":     ["params.level", "level", "event_level", "severity"],
         "params.desc":      ["params.desc", "description", "desc", "message"],
         "workflow_uuid":    ["workflow_uuid"],

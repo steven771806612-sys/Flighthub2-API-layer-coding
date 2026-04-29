@@ -25,6 +25,14 @@ from app.config import settings
 
 DEFAULT_SOURCE = "flighthub2"
 
+# ── Third-party source defaults ───────────────────────────────────────────────
+# These are seeded NX (never overwrite existing config) so users can override.
+# Hikvision cameras never carry GPS in their payloads; the device ID comes from
+# the "channelName" field (e.g. "DXB-Camera-1").  Without this seed the operator
+# would have to configure Device ID Field manually before GPS injection works.
+HIKVISION_SOURCE = "hikvision"
+HIKVISION_DEVICE_ID_FIELD = "channelName"  # flat-event key used as device lookup key
+
 DEFAULT_MAPPING = {
     "mappings": [
         {"src": "$.timestamp",   "dst": "timestamp",   "type": "string", "default": "",     "required": False},
@@ -103,6 +111,13 @@ async def _set_nx(redis: Redis, key: str, value: dict) -> bool:
     return result is not None   # Redis SET NX returns None when key exists
 
 
+async def _set_str_nx(redis: Redis, key: str, value: str) -> bool:
+    """SET a plain string key NX.  Returns True if written."""
+    serialized = json.dumps(value, ensure_ascii=False)
+    result = await redis.set(key, serialized, nx=True)
+    return result is not None
+
+
 async def _patch_all_stale_mappings(redis: Redis) -> list[str]:
     """Scan all uw:map:* keys and patch any that still use default:0 for lat/lng.
 
@@ -142,19 +157,32 @@ async def main():
     wrote_fhcfg   = await _set_nx(r, f"uw:fhcfg:{DEFAULT_SOURCE}",  DEFAULT_FHCFG)
     wrote_srcauth = await _set_nx(r, f"uw:srcauth:{DEFAULT_SOURCE}", DEFAULT_SRCAUTH)
 
-    # ── Step 2: Patch ALL sources that still use the old default:0 lat/lng ────
-    # This fixes sources registered before the coord-injection bug was identified.
-    # Safe to run repeatedly — only rewrites keys that actually need patching.
-    patched = await _patch_all_stale_mappings(r)
-
-    await r.aclose()
-
     print(
         f"[bootstrap] source={DEFAULT_SOURCE} "
         f"map={'CREATED' if wrote_map else 'EXISTS(kept)'} "
         f"fhcfg={'CREATED' if wrote_fhcfg else 'EXISTS(kept)'} "
         f"srcauth={'CREATED' if wrote_srcauth else 'EXISTS(kept)'}"
     )
+
+    # ── Step 2: Seed Hikvision device_id_field if not already set ─────────────
+    # Hikvision payloads carry the camera identifier in the "channelName" field.
+    # Without this seed the worker cannot resolve which device record to look up,
+    # so device GPS is never injected.  The operator can still override this via
+    # Console → Device → Device ID Field at any time.
+    hik_field_key = f"uw:deviceidfield:{HIKVISION_SOURCE}"
+    wrote_hik_field = await _set_str_nx(r, hik_field_key, HIKVISION_DEVICE_ID_FIELD)
+    print(
+        f"[bootstrap] source={HIKVISION_SOURCE} "
+        f"device_id_field={'CREATED (channelName)' if wrote_hik_field else 'EXISTS(kept)'}"
+    )
+
+    # ── Step 3: Patch ALL sources that still use the old default:0 lat/lng ────
+    # This fixes sources registered before the coord-injection bug was identified.
+    # Safe to run repeatedly — only rewrites keys that actually need patching.
+    patched = await _patch_all_stale_mappings(r)
+
+    await r.aclose()
+
     if patched:
         print(f"[bootstrap] patched stale coord defaults for {len(patched)} source(s): {patched}")
     else:
