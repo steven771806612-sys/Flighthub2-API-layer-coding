@@ -71,6 +71,27 @@ DEFAULT_SRCAUTH = {
 }
 
 
+def _has_stale_coord_defaults(mapping_conf: dict) -> bool:
+    """Return True if any lat/lng rule still uses default:0 (old broken config)."""
+    for rule in mapping_conf.get("mappings", []):
+        if rule.get("dst") in ("latitude", "longitude"):
+            default = rule.get("default")
+            if default == 0 or default == 0.0:
+                return True
+    return False
+
+
+def _patch_coord_defaults(mapping_conf: dict) -> dict:
+    """Return a copy with lat/lng default changed from 0 → None."""
+    import copy
+    patched = copy.deepcopy(mapping_conf)
+    for rule in patched.get("mappings", []):
+        if rule.get("dst") in ("latitude", "longitude"):
+            if rule.get("default") == 0 or rule.get("default") == 0.0:
+                rule["default"] = None
+    return patched
+
+
 async def _set_nx(redis: Redis, key: str, value: dict) -> bool:
     """SET key value NX — write only when key is absent.
 
@@ -82,12 +103,49 @@ async def _set_nx(redis: Redis, key: str, value: dict) -> bool:
     return result is not None   # Redis SET NX returns None when key exists
 
 
+async def _patch_all_stale_mappings(redis: Redis) -> list[str]:
+    """Scan all uw:map:* keys and patch any that still use default:0 for lat/lng.
+
+    This migration runs on every startup but is cheap — it only rewrites keys
+    that actually need patching.  Returns list of patched source names.
+    """
+    patched: list[str] = []
+    cursor = 0
+    while True:
+        cursor, keys = await redis.scan(cursor=cursor, match="uw:map:*", count=200)
+        for key in keys:
+            if isinstance(key, bytes):
+                key = key.decode("utf-8", errors="ignore")
+            try:
+                raw = await redis.get(key)
+                if not raw:
+                    continue
+                stored = json.loads(raw)
+                if _has_stale_coord_defaults(stored):
+                    fixed = _patch_coord_defaults(stored)
+                    await redis.set(key, json.dumps(fixed, ensure_ascii=False))
+                    source = key.replace("uw:map:", "", 1)
+                    patched.append(source)
+                    print(f"[bootstrap] patched stale coord defaults for source={source}")
+            except Exception as e:
+                print(f"[bootstrap] warning: could not patch {key}: {e}")
+        if cursor == 0:
+            break
+    return patched
+
+
 async def main():
     r = Redis.from_url(settings.REDIS_URL, decode_responses=True)
 
+    # ── Step 1: Initialize default source if keys do not exist ───────────────
     wrote_map     = await _set_nx(r, f"uw:map:{DEFAULT_SOURCE}",     DEFAULT_MAPPING)
     wrote_fhcfg   = await _set_nx(r, f"uw:fhcfg:{DEFAULT_SOURCE}",  DEFAULT_FHCFG)
     wrote_srcauth = await _set_nx(r, f"uw:srcauth:{DEFAULT_SOURCE}", DEFAULT_SRCAUTH)
+
+    # ── Step 2: Patch ALL sources that still use the old default:0 lat/lng ────
+    # This fixes sources registered before the coord-injection bug was identified.
+    # Safe to run repeatedly — only rewrites keys that actually need patching.
+    patched = await _patch_all_stale_mappings(r)
 
     await r.aclose()
 
@@ -97,6 +155,10 @@ async def main():
         f"fhcfg={'CREATED' if wrote_fhcfg else 'EXISTS(kept)'} "
         f"srcauth={'CREATED' if wrote_srcauth else 'EXISTS(kept)'}"
     )
+    if patched:
+        print(f"[bootstrap] patched stale coord defaults for {len(patched)} source(s): {patched}")
+    else:
+        print("[bootstrap] all stored mappings already use correct coord defaults")
 
 
 if __name__ == "__main__":

@@ -517,6 +517,46 @@ async def mapping_reset(payload: dict[str, Any], x_admin_token: str | None = Hea
     return {"status": "ok", "message": f"mapping for source '{source}' reset to DEFAULT_MAPPING"}
 
 
+@app.post("/admin/mapping/migrate")
+async def mapping_migrate(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
+    """Scan ALL sources and patch any stale lat/lng default:0 mapping rules.
+
+    This is a one-shot migration endpoint to fix mappings stored in Redis before
+    the default:0 bug was identified.  It is safe to call multiple times —
+    sources that already use default:None are left untouched.
+
+    Output: { status, patched: [source,...], skipped: [source,...] }
+    """
+    global repo
+    assert repo is not None
+    _require_admin(x_admin_token)
+
+    sources = await repo.list_sources()
+    patched: list[str] = []
+    skipped: list[str] = []
+
+    for src in sources:
+        raw = await repo.redis.get(repo._k_map(src))
+        if not raw:
+            skipped.append(src)
+            continue
+        import json as _json
+        stored = _json.loads(raw)
+        if repo._has_stale_coord_defaults(stored):
+            fixed = repo._patch_coord_defaults(stored)
+            await repo.set_mapping(src, fixed)
+            patched.append(src)
+        else:
+            skipped.append(src)
+
+    return {
+        "status": "ok",
+        "patched": patched,
+        "skipped": skipped,
+        "message": f"Patched {len(patched)} source(s), {len(skipped)} already clean.",
+    }
+
+
 @app.post("/admin/flighthub/get")
 async def flighthub_get(payload: dict[str, Any], x_admin_token: str | None = Header(default=None)):
     global repo

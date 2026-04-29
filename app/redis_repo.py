@@ -79,6 +79,33 @@ class RedisRepo:
         "token": "",
     }
 
+    @staticmethod
+    def _has_stale_coord_defaults(mapping_conf: dict) -> bool:
+        """Return True if any lat/lng rule still uses default:0 (old broken config).
+
+        Old DEFAULT_MAPPING had ``"default": 0`` for latitude/longitude which
+        injects 0.0 even when the payload has no coords, blocking the device-
+        registry GPS injection step.  Any stored mapping with this pattern must
+        be upgraded to ``"default": None``.
+        """
+        for rule in mapping_conf.get("mappings", []):
+            if rule.get("dst") in ("latitude", "longitude"):
+                default = rule.get("default")
+                if default == 0 or default == 0.0:
+                    return True
+        return False
+
+    @staticmethod
+    def _patch_coord_defaults(mapping_conf: dict) -> dict:
+        """Return a copy of mapping_conf with lat/lng default changed from 0 → None."""
+        import copy
+        patched = copy.deepcopy(mapping_conf)
+        for rule in patched.get("mappings", []):
+            if rule.get("dst") in ("latitude", "longitude"):
+                if rule.get("default") == 0 or rule.get("default") == 0.0:
+                    rule["default"] = None
+        return patched
+
     async def get_mapping(self, source: str) -> dict:
         raw = await self.redis.get(self._k_map(source))
         if not raw:
@@ -87,15 +114,20 @@ class RedisRepo:
             return self._DEFAULT_MAPPING
 
         stored = json.loads(raw)
-        # Guard: if the stored value is an empty dict {} or has no rules at all
-        # (no "mappings" list AND no "dsl" dict), treat it as uninitialized and
-        # return DEFAULT_MAPPING so the pipeline still works out-of-the-box.
-        # This handles the case where a source was registered before the
-        # auto-init logic existed, leaving {} in Redis.
+        # Guard 1: empty dict {} or no rules at all → return DEFAULT_MAPPING
+        # (handles sources registered before auto-init logic existed)
         if not stored or (not stored.get("mappings") and not stored.get("dsl")):
-            # Upgrade the stored key in-place so future reads also get defaults.
             await self.redis.set(self._k_map(source), json.dumps(self._DEFAULT_MAPPING, ensure_ascii=False))
             return self._DEFAULT_MAPPING
+
+        # Guard 2: stale default:0 for lat/lng → patch in-place and return fixed copy.
+        # Old DEFAULT_MAPPING used default:0 which injects 0.0 into the unified
+        # event even when the payload has no coordinates.  This blocks the device-
+        # registry GPS injection because autofill treats 0.0 as a valid value.
+        if self._has_stale_coord_defaults(stored):
+            patched = self._patch_coord_defaults(stored)
+            await self.redis.set(self._k_map(source), json.dumps(patched, ensure_ascii=False))
+            return patched
 
         return stored
 
