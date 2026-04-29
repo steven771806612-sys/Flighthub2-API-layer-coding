@@ -6,14 +6,14 @@ or configured defaults, after the mapping stage.
 
 Pipeline position
 -----------------
-    mapping → **autofill** → template → HTTP
+    mapping → canonical → enrichment → **autofill** → template → HTTP
 
 FH2 required body structure
 ----------------------------
 {
     "workflow_uuid": str,       # from egress config
     "trigger_type":  int,       # default 0
-    "name":          str,       # e.g. "Alert-{timestamp}"
+    "name":          str,       # e.g. "motion_detection"
     "params": {
         "creator":   str,
         "latitude":  float,
@@ -23,23 +23,37 @@ FH2 required body structure
     }
 }
 
-Autofill rules (in priority order)
-------------------------------------
-1. Value already present in mapped dict → keep
-2. Alias fields in mapped dict (e.g. "latitude" for "params.latitude") → use
-3. Flat-event fallback — look up well-known keys directly in the flat dict
-   (handles the case where no mapping is configured for a source yet)
-4. Device location from device_info (lat/lng from uw:device record) → inject
-5. Configured default in autofill_conf → apply
-6. Hardcoded default → apply
-7. Field remains missing → add to missing[] list
+Coordinate injection priority (params.latitude / params.longitude)
+------------------------------------------------------------------
+For coordinates specifically, the priority chain is:
+
+  1. Mapped value — payload carried a real non-zero lat/lng in a recognised
+     field name (e.g. "latitude", "lat", "params.latitude")
+  2. Flat-event direct keys — same but read from the pre-flatten dict
+     (catches payloads where mapping wasn't configured yet)
+  3. event["location"] dict — populated by enrichment() from the device
+     registry (uw:device:{device_id}).  This is the primary injection
+     mechanism for cameras/sensors that never carry GPS in their payloads.
+  4. device_info["location"] — explicit device_info dict passed by caller
+  5. autofill_conf override
+  6. Hardcoded last-resort 0
+
+IMPORTANT: steps 1 & 2 explicitly SKIP values of exactly 0 / 0.0 for
+coords, because 0.0 is indistinguishable from "mapping produced a
+default" (old mappings used default:0).  Only a genuinely non-zero lat/lng
+from the payload is treated as a real coordinate.
+
+Other autofill rules (non-coord fields) in priority order
+----------------------------------------------------------
+1. Value already present in mapped dict → keep (non-empty, non-None)
+2. Alias fields in mapped dict → use
+3. Flat-event fallback — look up well-known keys in the flat dict
+4. autofill_conf override
+5. Hardcoded default
 
 Device ID resolution
 --------------------
 The caller is responsible for resolving the device_id before calling autofill().
-If the source uses a non-standard field (e.g. deviceSN), the caller should
-look up device_id_field from Redis and extract the value from the flat/mapped dict
-before fetching device_info.
 
 Public API
 ----------
@@ -79,20 +93,53 @@ _FH2_TOP: list[tuple[str, type, Any]] = [
 ]
 
 # ─── Flat-event fallback keys ──────────────────────────────────────────────────
-# When the mapping stage produces no value for a field, these flat-dict keys are
-# tried in order before resorting to device data / configured defaults.
-# This ensures payloads whose fields match common names work out-of-the-box
-# without requiring a custom mapping to be configured first.
 _FLAT_FALLBACK: dict[str, list[str]] = {
     "params.creator":   ["creator_id", "creator", "operator_id", "operator", "user_id"],
     "params.latitude":  ["latitude", "lat", "location.lat", "gps.lat", "position.lat"],
     "params.longitude": ["longitude", "lng", "lon", "location.lng", "gps.lng", "position.lng"],
     "params.level":     ["level", "severity", "priority", "alert_level", "event_level"],
     "params.desc":      ["description", "desc", "message", "msg", "content", "detail"],
-    # name: try event.name (nested, flattened to "event.name"), then plain name
     "name":             ["name", "event_name", "event.name", "event.type",
                          "eventName", "eventType", "alert_name", "title"],
 }
+
+# ─── Coord alias keys in the unified/mapped dict ──────────────────────────────
+_COORD_ALIASES: dict[str, list[str]] = {
+    "params.latitude":  ["params.latitude", "latitude", "lat"],
+    "params.longitude": ["params.longitude", "longitude", "lng"],
+}
+
+# ─── Device location key mapping ─────────────────────────────────────────────
+_DEVICE_LOC_KEY: dict[str, str] = {
+    "params.latitude":  "lat",
+    "params.longitude": "lng",
+}
+
+
+def _is_real_coord(v: Any) -> bool:
+    """Return True only when *v* is a non-None, non-zero numeric coordinate.
+
+    0 / 0.0 is treated as "not set" because old DEFAULT_MAPPING rules used
+    default:0, making it indistinguishable from a genuine missing value.
+    Real coordinates of exactly 0° (Gulf of Guinea) are not relevant here.
+    """
+    if v is None:
+        return False
+    if isinstance(v, str) and not v.strip():
+        return False
+    try:
+        return float(v) != 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_valid(v: Any) -> bool:
+    """Return True when *v* is a usable non-empty value (for non-coord fields)."""
+    if v is None:
+        return False
+    if isinstance(v, str) and not v.strip():
+        return False
+    return True
 
 
 def autofill(
@@ -106,49 +153,41 @@ def autofill(
     Parameters
     ----------
     mapped : dict
-        Output of apply_mappings().  Keys are unified field names.
+        Output of apply_mappings() passed through canonical + enrichment.
+        After enrichment, ``mapped["location"]`` may contain real device
+        coordinates from the device registry.
     device_info : dict
         Device metadata from uw:device:{device_id}.  May be empty.
-        If the device has location data (lat/lng), they will be used to fill
-        params.latitude / params.longitude when not already mapped.
     autofill_conf : dict
-        Per-source autofill overrides, e.g.::
-
-            {
-                "params.level":     3,
-                "params.creator":   "auto",
-            }
-
+        Per-source autofill overrides.
     flat_event : dict | None
-        Flattened webhook payload (output of flatten_json).  When provided,
-        used as a last-resort fallback before hardcoded defaults — enables
-        out-of-the-box field extraction even when no mapping is configured.
+        Flattened webhook payload (output of flatten_json).
 
     Returns
     -------
     (filled, missing) : tuple
-        filled  — merged dict with all resolvable fields set
-        missing — list of body paths that remain unfilled
     """
     filled: dict[str, Any] = dict(mapped)
     missing: list[str] = []
-
-    loc = device_info.get("location") or {}
     _flat = flat_event or {}
 
-    # Device field mapping: body_path → device location key
-    _device_map: dict[str, str] = {
-        "params.latitude":  "lat",
-        "params.longitude": "lng",
-    }
+    # ── Collect device location from all available sources ────────────────────
+    # Priority: explicit device_info arg > event["location"] set by enrich()
+    # Both are checked so the caller doesn't need to worry about which path
+    # populated the location.
+    dev_loc: dict[str, Any] = {}
+    # 1. event["location"] — written by enrichment() from uw:device record
+    ev_loc = mapped.get("location") or {}
+    if isinstance(ev_loc, dict):
+        dev_loc.update({k: v for k, v in ev_loc.items() if v is not None and v != 0.0})
+    # 2. explicit device_info["location"] — passed by caller
+    di_loc = (device_info or {}).get("location") or {}
+    if isinstance(di_loc, dict):
+        dev_loc.update({k: v for k, v in di_loc.items() if v is not None and v != 0.0})
 
-    # Mapped field aliases: body_path → possible mapped keys.
-    # Include dot-path variants (e.g. "params.latitude") that visualToLegacy
-    # may write as dst when saving from the visual mapping UI.
+    # Alias lookup for non-coord fields
     _mapped_aliases: dict[str, list[str]] = {
         "params.creator":   ["params.creator", "creator_id", "creator", "operator"],
-        "params.latitude":  ["params.latitude", "latitude", "lat"],
-        "params.longitude": ["params.longitude", "longitude", "lng"],
         "params.level":     ["params.level", "level", "event_level", "severity"],
         "params.desc":      ["params.desc", "description", "desc", "message"],
         "workflow_uuid":    ["workflow_uuid"],
@@ -159,49 +198,60 @@ def autofill(
     all_fields = _FH2_TOP + _FH2_PARAMS
 
     for body_path, cast, hardcoded_default in all_fields:
-        # 1. Already in filled under exact body_path key — skip empty strings
+        is_coord = body_path in _DEVICE_LOC_KEY
+
+        # ══════════════════════════════════════════════════════════
+        # COORDINATE FIELDS — special priority chain
+        # ══════════════════════════════════════════════════════════
+        if is_coord:
+            val = _resolve_coord(body_path, filled, _flat, dev_loc)
+
+            if val is not None:
+                try:
+                    filled[body_path] = float(val)
+                except (TypeError, ValueError):
+                    filled[body_path] = val
+            else:
+                # Last resort: 0.0 — at least the body is schema-valid
+                filled[body_path] = 0.0
+                missing.append(body_path)
+            continue
+
+        # ══════════════════════════════════════════════════════════
+        # NON-COORD FIELDS — original priority chain
+        # ══════════════════════════════════════════════════════════
+
+        # 1. Already present under exact body_path
         if body_path in filled:
             existing = filled[body_path]
-            if existing is not None and not (isinstance(existing, str) and not str(existing).strip()):
+            if _is_valid(existing):
                 _safe_cast(filled, body_path, cast)
                 continue
 
-        # 2. Try mapped aliases (skip None and empty/whitespace strings)
+        # 2. Mapped aliases
         val = None
         for alias in _mapped_aliases.get(body_path, []):
-            if alias in filled:
-                candidate = filled[alias]
-                if candidate is not None and not (isinstance(candidate, str) and not str(candidate).strip()):
-                    val = candidate
-                    break
+            if alias in filled and _is_valid(filled[alias]):
+                val = filled[alias]
+                break
 
-        # 3. Flat-event fallback — read directly from the flattened payload
-        #    when the mapping stage produced nothing useful.  This makes the
-        #    pipeline work out-of-the-box for common field names even when no
-        #    custom mapping has been configured for the source.
-        if val is None and _flat:
+        # 3. Flat-event fallback
+        if val is None:
             for flat_key in _FLAT_FALLBACK.get(body_path, []):
                 candidate = _flat.get(flat_key)
-                if candidate is not None and not (isinstance(candidate, str) and not str(candidate).strip()):
+                if _is_valid(candidate):
                     val = candidate
                     break
 
-        # 4. Try device location (GPS injected from device registry)
-        if val is None and body_path in _device_map:
-            device_key = _device_map[body_path]
-            if loc.get(device_key) is not None:
-                val = loc[device_key]
-
-        # 5. Try autofill_conf
+        # 4. autofill_conf
         if val is None and body_path in autofill_conf:
             val = autofill_conf[body_path]
 
-        # 6. Hardcoded default
+        # 5. Hardcoded default
         if val is None and hardcoded_default is not None:
             val = hardcoded_default
 
         if val is not None:
-            # Special: cast level string (warning/critical/…) → int
             if cast is int and isinstance(val, str) and not val.lstrip('-').isdigit():
                 val = _LEVEL_MAP.get(val.lower().strip(), 3)
             try:
@@ -214,30 +264,54 @@ def autofill(
     return filled, missing
 
 
+def _resolve_coord(
+    body_path: str,
+    filled: dict[str, Any],
+    flat: dict[str, Any],
+    dev_loc: dict[str, Any],
+) -> Any:
+    """Resolve a coordinate field using a strict priority chain.
+
+    Priority
+    --------
+    1. Non-zero value in filled under a coord alias key
+    2. Non-zero value in flat_event under a flat fallback key
+    3. Device location (from enrich or device_info) — real GPS from registry
+    4. None (caller will use 0.0 as last resort)
+
+    Only non-zero values are accepted from steps 1 & 2 to avoid treating
+    the old default:0 sentinel as a real coordinate.
+    """
+    # Step 1: check mapped/filled aliases (only non-zero)
+    for alias in _COORD_ALIASES.get(body_path, []):
+        if alias in filled and _is_real_coord(filled[alias]):
+            return filled[alias]
+
+    # Step 2: flat-event direct keys (only non-zero)
+    for flat_key in _FLAT_FALLBACK.get(body_path, []):
+        candidate = flat.get(flat_key)
+        if _is_real_coord(candidate):
+            return candidate
+
+    # Step 3: device location from registry (can be any non-None value,
+    # including 0.0 if a device is genuinely at 0°)
+    dev_key = _DEVICE_LOC_KEY.get(body_path)
+    if dev_key and dev_key in dev_loc:
+        return dev_loc[dev_key]
+
+    return None
+
+
 def build_fh2_body(
     filled: dict[str, Any],
     workflow_uuid: str = "",
 ) -> dict[str, Any]:
-    """Construct the final FH2 API request body from filled fields.
-
-    Parameters
-    ----------
-    filled : dict
-        Output of autofill().
-    workflow_uuid : str
-        Explicit override; if filled already has it, this is ignored.
-
-    Returns
-    -------
-    dict
-        Ready-to-send FH2 body.
-    """
+    """Construct the final FH2 API request body from filled fields."""
     wf_uuid = filled.get("workflow_uuid") or workflow_uuid or ""
 
     def _f(key: str, default: Any = None) -> Any:
         return filled.get(key, default)
 
-    # Safely cast level — may still be a string ("warning") at this point
     raw_level = _f("params.level", 3)
     if isinstance(raw_level, str) and not raw_level.lstrip('-').isdigit():
         raw_level = _LEVEL_MAP.get(raw_level.lower().strip(), 3)
@@ -245,7 +319,7 @@ def build_fh2_body(
         level_int = int(raw_level)
     except (TypeError, ValueError):
         level_int = 3
-    level_int = max(1, min(5, level_int))  # clamp to 1-5
+    level_int = max(1, min(5, level_int))
 
     return {
         "workflow_uuid": wf_uuid,

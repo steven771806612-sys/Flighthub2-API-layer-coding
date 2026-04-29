@@ -27,13 +27,15 @@ DEFAULT_SOURCE = "flighthub2"
 
 DEFAULT_MAPPING = {
     "mappings": [
-        {"src": "$.timestamp",   "dst": "timestamp",   "type": "string", "default": "",       "required": False},
-        {"src": "$.creator_id",  "dst": "creator_id",  "type": "string", "default": "system", "required": True},
-        {"src": "$.latitude",    "dst": "latitude",    "type": "float",  "default": 0,        "required": False},
-        {"src": "$.longitude",   "dst": "longitude",   "type": "float",  "default": 0,        "required": False},
-        {"src": "$.level",       "dst": "level",       "type": "string", "default": "info",   "required": True},
-        {"src": "$.description", "dst": "description", "type": "string", "default": "",       "required": False},
-        {"src": "$.event.name",  "dst": "name",        "type": "string", "default": "",       "required": False},
+        {"src": "$.timestamp",   "dst": "timestamp",   "type": "string", "default": "",     "required": False},
+        {"src": "$.creator_id",  "dst": "creator_id",  "type": "string", "default": "",     "required": False},
+        # latitude/longitude: NO default — absence means no real coord in payload.
+        # autofill will then try: flat-event fallback → device registry → 0 last-resort.
+        {"src": "$.latitude",    "dst": "latitude",    "type": "float",  "default": None,   "required": False},
+        {"src": "$.longitude",   "dst": "longitude",   "type": "float",  "default": None,   "required": False},
+        {"src": "$.level",       "dst": "level",       "type": "string", "default": "info", "required": False},
+        {"src": "$.description", "dst": "description", "type": "string", "default": "",     "required": False},
+        {"src": "$.event.name",  "dst": "name",        "type": "string", "default": "",     "required": False},
     ]
 }
 

@@ -747,13 +747,25 @@ async def debug_run(payload: dict[str, Any], x_admin_token: str | None = Header(
         # Stage 4 — canonical
         event = build_event(mapped, raw, source)
 
-        # Stage 5 — enrichment (read-only)
+        # Stage 5 — resolve device_id BEFORE enrichment so enrich() can look
+        # up the device record and inject location into event["location"].
+        fhcfg = await repo.get_fhcfg(source)
+        device_id = event.get("device_id") or event.get("device", {}).get("id") or ""
+
+        device_id_field = await repo.get_device_id_field(source)
+        if not device_id and device_id_field:
+            device_id = str(event.get(device_id_field) or flat.get(device_id_field) or "")
+
+        if device_id:
+            event["device_id"] = device_id
+            event["device"] = {"id": device_id}
+
+        # Stage 6 — enrichment: now that device_id is set, enrich() will find
+        # the uw:device record and write real GPS into event["location"].
         event = await enrich(event, repo)
         stages["event"] = event
 
-        # Stage 6 — autofill → final FH2 body
-        fhcfg = await repo.get_fhcfg(source)
-        device_id = event.get("device_id") or event.get("device", {}).get("id") or ""
+        # Stage 7 — autofill → final FH2 body
         device_info = (await repo.get_device(str(device_id))) if device_id else {}
         autofill_conf = fhcfg.get("autofill", {}) if isinstance(fhcfg, dict) else {}
         workflow_uuid = ""
@@ -761,13 +773,6 @@ async def debug_run(payload: dict[str, Any], x_admin_token: str | None = Header(
             tb = fhcfg.get("template_body", {})
             if isinstance(tb, dict):
                 workflow_uuid = str(tb.get("workflow_uuid", ""))
-
-        # Resolve device_id using per-source field config if standard key not found
-        device_id_field = await repo.get_device_id_field(source)
-        if not device_id and device_id_field:
-            device_id = str(event.get(device_id_field) or flat.get(device_id_field) or "")
-            if device_id:
-                device_info = await repo.get_device(device_id)
 
         filled, missing = autofill(event, device_info, autofill_conf, flat_event=flat)
         final_body = build_fh2_body(filled, workflow_uuid=workflow_uuid)
