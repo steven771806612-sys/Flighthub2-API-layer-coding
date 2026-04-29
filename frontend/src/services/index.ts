@@ -150,6 +150,13 @@ export interface ProcessingLog {
   workflow_uuid: string
   missing_fields: string[]
   ok: boolean
+  // Device diagnostic fields — power the GPS Injection Diagnostic panel
+  device_id?: string
+  device_id_field?: string
+  device_found?: boolean
+  device_has_gps?: boolean
+  // Pipeline diagnostic trace — added by worker, shows every step's state
+  diag?: string
 }
 
 export const logService = {

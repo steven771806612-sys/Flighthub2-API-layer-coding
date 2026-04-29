@@ -97,6 +97,10 @@ async def process_message(
     Always ACKs the message (even on error) so it never gets stuck in PEL
     permanently.  Errors are written to the Processing Log so they surface
     in the console UI.
+
+    Diagnostic trace is embedded in every log entry under the "diag" key so
+    operators can see exactly what happened at each pipeline step without
+    needing access to Railway deployment logs.
     """
     data = fields.get("data")
     try:
@@ -107,6 +111,9 @@ async def process_message(
     source = msg.get("source") or settings.DEFAULT_SOURCE
     received_at = int(msg.get("received_at") or _now_ts())
     webhook_event = msg.get("webhook_event") or {}
+
+    # Diagnostic trace — appended at each step, stored in the log entry
+    diag: list[str] = []
 
     # ── Outer guard: catch any unhandled exception so the worker never dies ──
     try:
@@ -120,18 +127,27 @@ async def process_message(
         headers = dict(headers)
         headers.setdefault("Content-Type", "application/json")
 
+        # Detect whether the mapping was auto-patched (stale default:0 → None)
+        lat_rule = next(
+            (r for r in (mapping_conf.get("mappings") or []) if r.get("dst") == "latitude"),
+            None,
+        )
+        diag.append(
+            f"mapping: lat_default={lat_rule.get('default') if lat_rule else 'no_rule'!r}"
+            if lat_rule else "mapping: no_latitude_rule"
+        )
+
         # ── Pipeline: raw → flatten → normalize → mapping → canonical → enrichment → autofill → HTTP ──
-        # NOTE: must mirror the debug_run pipeline in app/main.py exactly so
-        # third-party pushes produce identical results to manual test triggers.
 
-        # Step 1: Flatten nested event into dot-notation dict
+        # Step 1: Flatten
         flat = flatten_json(webhook_event)
+        diag.append(f"flat_keys={sorted(flat.keys())}")
 
-        # Step 2: Normalize — apply adapter config to produce unified fields
+        # Step 2: Normalize
         adapter_conf = await repo.get_adapter(source)
         normalized_flat = normalize(flat, adapter_conf)
 
-        # Step 3: Mapping — JSONPath / DSL mappings applied to normalized flat
+        # Step 3: Mapping
         try:
             unified = apply_mappings(
                 webhook_event, source, mapping_conf, received_at,
@@ -139,48 +155,69 @@ async def process_message(
             )
         except Exception as e:
             print(f"[worker] mapping error source={source} msg_id={msg_id}: {e}")
-            # Write a failed log entry so it's visible in the console
             await _write_error_log(repo, source, msg_id, f"mapping error: {e}")
             await redis.xack(settings.STREAM_KEY_RAW, settings.STREAM_GROUP, msg_id)
             return
 
-        # Step 4: Canonical envelope — normalises shape, extracts location,
-        # merges all mapped fields.
-        unified = build_event(unified, webhook_event, source)
+        diag.append(
+            f"after_mapping: lat={unified.get('latitude')!r} "
+            f"lng={unified.get('longitude')!r} "
+            f"name={unified.get('name')!r}"
+        )
 
-        # Step 5: Resolve device_id FIRST so enrichment can look up the device.
-        # Order matters: device_id must be injected into unified BEFORE enrich()
-        # is called, otherwise enrich() finds no device_id and skips the lookup,
-        # leaving location={lat:None, lng:None} and blocking coord injection.
+        # Step 4: Canonical envelope
+        unified = build_event(unified, webhook_event, source)
+        diag.append(f"after_canonical: location={unified.get('location')}")
+
+        # Step 5: Resolve device_id BEFORE enrichment
         device_id = unified.get("device_id") or ""
         if isinstance(unified.get("device"), dict):
             device_id = device_id or unified["device"].get("id", "")
 
+        device_id_field = ""
         if not device_id:
-            # Per-source field config: e.g. for hikvision "creator_id" is the
-            # device key (set via Console → Device → Device ID Field).
             device_id_field = await repo.get_device_id_field(source)
             if device_id_field:
                 device_id = str(
                     unified.get(device_id_field) or flat.get(device_id_field) or ""
                 )
 
-        # Inject device_id into the event so enrich() can find it
+        diag.append(
+            f"device_id_field={device_id_field!r} "
+            f"resolved_device_id={device_id!r}"
+        )
+
         if device_id:
             unified["device_id"] = device_id
             unified["device"] = {"id": device_id}
 
-        # Step 6: Enrichment — inject device metadata (location, model, site…)
-        # from uw:device:{device_id}.  Now that device_id is set, enrich() will
-        # find the record and write location into unified["location"].
+        # Step 6: Enrichment
         unified = await enrich(unified, repo)
+        loc_after_enrich = unified.get("location")
+        diag.append(f"after_enrich: location={loc_after_enrich}")
 
-        # Step 7: Fetch device_info for autofill's coord injection fallback
-        # (autofill reads both unified["location"] AND device_info["location"])
+        # Step 7: Fetch device_info
         device_info = (await repo.get_device(str(device_id))) if device_id else {}
+        has_device_gps = bool(
+            isinstance(device_info.get("location"), dict) and
+            any(v for v in device_info["location"].values() if v)
+        )
+        diag.append(
+            f"device_info_keys={list(device_info.keys())} "
+            f"device_gps={device_info.get('location')}"
+        )
 
-        # Step 8: Autofill — fill missing FH2 body fields using flat-event
-        # fallback (keyword matching), device location, and configured defaults.
+        # Print pipeline state to Railway logs for easy debugging
+        print(
+            f"[worker][diag] source={source} msg_id={msg_id} "
+            f"device_id={device_id!r} "
+            f"device_id_field={device_id_field!r} "
+            f"has_device_gps={has_device_gps} "
+            f"loc_after_enrich={loc_after_enrich} "
+            f"mapping_lat_default={lat_rule.get('default') if lat_rule else 'N/A'!r}"
+        )
+
+        # Step 8: Autofill
         autofill_conf = {}
         workflow_uuid = ""
         if isinstance(fhcfg, dict):
@@ -191,6 +228,12 @@ async def process_message(
 
         filled, missing_fields = autofill(unified, device_info, autofill_conf, flat_event=flat)
         body = build_fh2_body(filled, workflow_uuid=workflow_uuid)
+
+        diag.append(
+            f"after_autofill: lat={body['params']['latitude']} "
+            f"lng={body['params']['longitude']} "
+            f"missing={missing_fields}"
+        )
 
         if missing_fields:
             print(f"[worker] missing fields source={source} fields={missing_fields}")
@@ -213,6 +256,13 @@ async def process_message(
                 "workflow_uuid": body.get("workflow_uuid", "") if isinstance(body, dict) else "",
                 "missing_fields": missing_fields,
                 "ok": bool(status and 200 <= status < 300),
+                # ── Device diagnostic fields — drive the GPS Injection panel ──
+                "device_id":       device_id or "",
+                "device_id_field": device_id_field or "",
+                "device_found":    bool(device_info),
+                "device_has_gps":  has_device_gps,
+                # ── Diagnostic trace — visible in Processing Logs panel ────────
+                "diag": " | ".join(diag),
             }
             await repo.append_log(source, log_entry)
         except Exception as log_exc:
