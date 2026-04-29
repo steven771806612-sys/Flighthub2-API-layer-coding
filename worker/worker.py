@@ -145,27 +145,38 @@ async def process_message(
             return
 
         # Step 4: Canonical envelope — normalises shape, extracts location,
-        # merges all mapped fields. This step was previously missing from the
-        # worker, causing the manual trigger (debug_run) and the async worker
-        # path to diverge; coordinate injection and keyword mapping were only
-        # applied during manual runs.
+        # merges all mapped fields.
         unified = build_event(unified, webhook_event, source)
 
-        # Step 5: Enrichment — inject device metadata if available
-        unified = await enrich(unified, repo)
-
-        # Step 7: Resolve device_id
+        # Step 5: Resolve device_id FIRST so enrichment can look up the device.
+        # Order matters: device_id must be injected into unified BEFORE enrich()
+        # is called, otherwise enrich() finds no device_id and skips the lookup,
+        # leaving location={lat:None, lng:None} and blocking coord injection.
         device_id = unified.get("device_id") or ""
         if isinstance(unified.get("device"), dict):
             device_id = device_id or unified["device"].get("id", "")
 
         if not device_id:
+            # Per-source field config: e.g. for hikvision "creator_id" is the
+            # device key (set via Console → Device → Device ID Field).
             device_id_field = await repo.get_device_id_field(source)
             if device_id_field:
                 device_id = str(
                     unified.get(device_id_field) or flat.get(device_id_field) or ""
                 )
 
+        # Inject device_id into the event so enrich() can find it
+        if device_id:
+            unified["device_id"] = device_id
+            unified["device"] = {"id": device_id}
+
+        # Step 6: Enrichment — inject device metadata (location, model, site…)
+        # from uw:device:{device_id}.  Now that device_id is set, enrich() will
+        # find the record and write location into unified["location"].
+        unified = await enrich(unified, repo)
+
+        # Step 7: Fetch device_info for autofill's coord injection fallback
+        # (autofill reads both unified["location"] AND device_info["location"])
         device_info = (await repo.get_device(str(device_id))) if device_id else {}
 
         # Step 8: Autofill — fill missing FH2 body fields using flat-event
