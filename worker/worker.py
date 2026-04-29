@@ -14,6 +14,7 @@ from app.mapping_engine import apply_mappings
 # ── Pipeline stages ──────────────────────────────────────────────────────────
 from app.flatten import flatten_json
 from app.normalize import normalize
+from app.canonical import build_event
 from app.enrichment import enrich
 from app.autofill import autofill, build_fh2_body
 
@@ -119,7 +120,9 @@ async def process_message(
         headers = dict(headers)
         headers.setdefault("Content-Type", "application/json")
 
-        # ── Pipeline: raw → flatten → normalize → mapping → autofill → HTTP ──
+        # ── Pipeline: raw → flatten → normalize → mapping → canonical → enrichment → autofill → HTTP ──
+        # NOTE: must mirror the debug_run pipeline in app/main.py exactly so
+        # third-party pushes produce identical results to manual test triggers.
 
         # Step 1: Flatten nested event into dot-notation dict
         flat = flatten_json(webhook_event)
@@ -141,10 +144,17 @@ async def process_message(
             await redis.xack(settings.STREAM_KEY_RAW, settings.STREAM_GROUP, msg_id)
             return
 
-        # Step 4: Enrichment — inject device metadata if available
+        # Step 4: Canonical envelope — normalises shape, extracts location,
+        # merges all mapped fields. This step was previously missing from the
+        # worker, causing the manual trigger (debug_run) and the async worker
+        # path to diverge; coordinate injection and keyword mapping were only
+        # applied during manual runs.
+        unified = build_event(unified, webhook_event, source)
+
+        # Step 5: Enrichment — inject device metadata if available
         unified = await enrich(unified, repo)
 
-        # Step 5: Resolve device_id
+        # Step 7: Resolve device_id
         device_id = unified.get("device_id") or ""
         if isinstance(unified.get("device"), dict):
             device_id = device_id or unified["device"].get("id", "")
@@ -158,6 +168,8 @@ async def process_message(
 
         device_info = (await repo.get_device(str(device_id))) if device_id else {}
 
+        # Step 8: Autofill — fill missing FH2 body fields using flat-event
+        # fallback (keyword matching), device location, and configured defaults.
         autofill_conf = {}
         workflow_uuid = ""
         if isinstance(fhcfg, dict):
@@ -172,7 +184,7 @@ async def process_message(
         if missing_fields:
             print(f"[worker] missing fields source={source} fields={missing_fields}")
 
-        # Step 6: Push to FlightHub2
+        # Step 9: Push to FlightHub2
         status, text = await push_flighthub(endpoint, headers, body, retry_policy)
         print(f"[worker] pushed msg_id={msg_id} source={source} http_status={status} name={body.get('name') if isinstance(body, dict) else 'n/a'}")
         if status and status >= 400:

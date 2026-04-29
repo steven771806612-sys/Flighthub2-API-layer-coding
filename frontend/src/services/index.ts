@@ -42,6 +42,11 @@ export const mappingService = {
   async set(sourceId: string, mapping: MappingConfig): Promise<void> {
     await apiClient.post('/admin/mapping/set', { source: sourceId, mapping })
   },
+
+  async reset(sourceId: string): Promise<string> {
+    const { data } = await apiClient.post('/admin/mapping/reset', { source: sourceId })
+    return data.message as string
+  },
 }
 
 // ─── Egress (FlightHub2) ──────────────────────────────────────────────────────
